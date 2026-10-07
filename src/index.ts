@@ -5,6 +5,7 @@ import { loadConfig, saveConfig, DEFAULT_CONFIG } from './config';
 import { login, logout } from './auth';
 import { printSystemMessage, printSuccess, printError, printPlanUpgradeNotice, getChalk, printStreamHeader, printStreamFooter } from './ui';
 import { estimateTokens, estimateCost, TokenStats } from './tokenTracker';
+import { CodeBoxStreamer } from './codeStreamer';
 import ora from 'ora';
 
 const program = new Command();
@@ -72,10 +73,11 @@ program
         if (!reader) throw new Error('Błąd strumienia.');
 
         spinner.stop();
-        printStreamHeader(config.model);
+        printStreamHeader();
 
         let isFirstLine = true;
         let fullText = '';
+        const streamer = new CodeBoxStreamer();
 
         while (true) {
           const { done, value } = await reader.read();
@@ -88,9 +90,13 @@ program
             isFirstLine = false;
           }
 
-          process.stdout.write(chunk);
-          fullText += chunk;
+          if (chunk) {
+            streamer.processChunk(chunk);
+            fullText += chunk;
+          }
         }
+
+        streamer.flush();
 
         const durationMs = Math.max(Date.now() - startTime, 1);
         const completionTokens = estimateTokens(fullText);

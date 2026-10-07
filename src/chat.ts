@@ -17,6 +17,7 @@ import {
 } from './ui';
 import { localTools, printToolsList } from './tools';
 import { estimateTokens, estimateCost, sessionTracker, TokenStats } from './tokenTracker';
+import { CodeBoxStreamer } from './codeStreamer';
 import ora from 'ora';
 
 export interface ModelInfo {
@@ -315,6 +316,7 @@ export async function startChat() {
 
       let isFirstChunk = true;
       let buffer = '';
+      const streamer = new CodeBoxStreamer();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -327,7 +329,7 @@ export async function startChat() {
           isFirstChunk = false;
           timeToFirstTokenMs = Date.now() - startTime;
           spinner.stop();
-          printStreamHeader(config.model);
+          printStreamHeader();
         }
 
         // Sprawdź czy pierwsza linia zawiera {"chatId": ...}
@@ -343,19 +345,15 @@ export async function startChat() {
           }
         }
 
-        // Wypisz na żywo do terminala
+        // Streamuj na żywo z formatowaniem okienek kodu
         if (buffer) {
-          process.stdout.write(buffer);
+          streamer.processChunk(buffer);
           fullResponse += buffer;
           buffer = '';
         }
       }
 
-      // Wypisz resztki bufora jeśli zostały
-      if (buffer) {
-        process.stdout.write(buffer);
-        fullResponse += buffer;
-      }
+      streamer.flush();
 
       const endTime = Date.now();
       const durationMs = Math.max(endTime - startTime, 1);
