@@ -99,18 +99,9 @@ Możesz ją modyfikować poleceniami:
 # Zmiana domyślnego modelu:
 wildai config -m claude-opus-5.5
 
-# Zmiana adresu serwera API:
-wildai config -b https://chat.wildai.pl/api/chat
-
 # Reset do ustawień fabrycznych:
 wildai config --reset
 ```
-
----
-
-## 🔒 Bezpieczeństwo i Plany
-
-WildAI CLI respektuje poziomy subskrypcji platformy (FREE, GO, PLUS, PRO, BUSINESS). Jeśli wybrany model wymaga wyższego planu, CLI wyświetli czytelne powiadomienie z informacją o wymaganym poziomie subskrypcji.
 
 ---
 

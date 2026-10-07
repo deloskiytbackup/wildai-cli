@@ -112,11 +112,7 @@ export async function startChat() {
   const isAlive = await checkConnection(config.baseUrl);
 
   if (!isAlive) {
-    printError(`Nie można nawiązać połączenia z serwerem: ${config.baseUrl}`);
-    console.log(chalk.yellow('\nUpewnij się, że:'));
-    console.log('1. Aplikacja WildAI jest dostępna w sieci.');
-    console.log('2. Adres URL w konfiguracji jest poprawny.');
-    console.log(chalk.dim('\nAby zmienić adres serwera, użyj: wildai config -b https://chat.wildai.pl/api/chat\n'));
+    printError('Nie można nawiązać połączenia z serwerem WildAI. Sprawdź swoje połączenie internetowe.');
     return;
   }
 
