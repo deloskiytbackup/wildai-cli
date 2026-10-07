@@ -72,10 +72,8 @@ program
         const decoder = new TextDecoder();
         if (!reader) throw new Error('Błąd strumienia.');
 
-        spinner.stop();
-        printStreamHeader();
-
         let isFirstLine = true;
+        let isFirstToken = true;
         let fullText = '';
         const streamer = new CodeBoxStreamer();
 
@@ -91,11 +89,19 @@ program
           }
 
           if (chunk) {
+            if (isFirstToken) {
+              isFirstToken = false;
+              spinner.stop();
+              printStreamHeader();
+            }
             streamer.processChunk(chunk);
             fullText += chunk;
           }
         }
 
+        if (isFirstToken) {
+          spinner.stop();
+        }
         streamer.flush();
 
         const durationMs = Math.max(Date.now() - startTime, 1);

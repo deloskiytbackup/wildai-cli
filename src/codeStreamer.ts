@@ -43,66 +43,83 @@ export class CodeBoxStreamer {
   private inCodeBlock = false;
   private currentLang = '';
   private lineNumber = 1;
-  private buffer = '';
+  private lineBuffer = '';
+  private isStartOfLine = true;
   private width = Math.min(process.stdout.columns || 76, 76);
 
   processChunk(chunk: string) {
-    this.buffer += chunk;
+    for (let i = 0; i < chunk.length; i++) {
+      const char = chunk[i];
 
-    while (this.buffer.includes('\n')) {
-      const idx = this.buffer.indexOf('\n');
-      const line = this.buffer.slice(0, idx);
-      this.buffer = this.buffer.slice(idx + 1);
-      this.handleLine(line);
+      if (this.inCodeBlock) {
+        this.lineBuffer += char;
+        if (char === '\n') {
+          const line = this.lineBuffer.replace(/\r?\n$/, '');
+          const trimmed = line.trim();
+          if (trimmed === '```') {
+            this.inCodeBlock = false;
+            const border = '─'.repeat(this.width - 2);
+            process.stdout.write(`${chalk.dim('╰' + border + '╯')}\n`);
+            this.isStartOfLine = true;
+          } else {
+            const numStr = (this.lineNumber++).toString().padStart(3, ' ');
+            const hl = highlightCode(line, this.currentLang);
+            process.stdout.write(`${chalk.dim('│')} ${chalk.dim(numStr)} ${chalk.dim('│')} ${hl}\n`);
+          }
+          this.lineBuffer = '';
+        }
+      } else {
+        if (this.isStartOfLine) {
+          this.lineBuffer += char;
+          if (this.lineBuffer.startsWith('`')) {
+            if (this.lineBuffer.length < 3) {
+              continue;
+            }
+            if (this.lineBuffer.startsWith('```')) {
+              if (char === '\n') {
+                this.inCodeBlock = true;
+                this.currentLang = this.lineBuffer.replace(/```|\r?\n/g, '').trim() || 'kod';
+                this.lineNumber = 1;
+                const langBadge = `[${this.currentLang}]`;
+                const borderLen = Math.max(1, this.width - langBadge.length - 6);
+                process.stdout.write(`\n${chalk.dim('╭─ ')}${chalk.bold.cyan(langBadge)} ${chalk.dim('─'.repeat(borderLen))}${chalk.dim('╮')}\n`);
+                this.lineBuffer = '';
+                this.isStartOfLine = false;
+              }
+              continue;
+            } else {
+              process.stdout.write(this.lineBuffer);
+              this.lineBuffer = '';
+              this.isStartOfLine = char === '\n';
+            }
+          } else {
+            process.stdout.write(this.lineBuffer);
+            this.lineBuffer = '';
+            this.isStartOfLine = char === '\n';
+          }
+        } else {
+          process.stdout.write(char);
+          if (char === '\n') {
+            this.isStartOfLine = true;
+          }
+        }
+      }
     }
-  }
-
-  private handleLine(line: string) {
-    const trimmed = line.trim();
-
-    // Wykrycie początku bloku kodu: ```typescript
-    if (!this.inCodeBlock && trimmed.startsWith('```')) {
-      this.inCodeBlock = true;
-      this.currentLang = trimmed.replace('```', '').trim() || 'kod';
-      this.lineNumber = 1;
-
-      const langBadge = `[${this.currentLang}]`;
-      const borderLen = Math.max(1, this.width - langBadge.length - 6);
-      process.stdout.write(`\n${chalk.dim('╭─ ')}${chalk.bold.cyan(langBadge)} ${chalk.dim('─'.repeat(borderLen))}${chalk.dim('╮')}\n`);
-      return;
-    }
-
-    // Wykrycie końca bloku kodu: ```
-    if (this.inCodeBlock && trimmed === '```') {
-      this.inCodeBlock = false;
-      const border = '─'.repeat(this.width - 2);
-      process.stdout.write(`${chalk.dim('╰' + border + '╯')}\n\n`);
-      return;
-    }
-
-    // Wypisywanie wewnątrz okienka kodu z numeracją linii i podświetlaniem
-    if (this.inCodeBlock) {
-      const numStr = (this.lineNumber++).toString().padStart(3, ' ');
-      const hl = highlightCode(line, this.currentLang);
-      process.stdout.write(`${chalk.dim('│')} ${chalk.dim(numStr)} ${chalk.dim('│')} ${hl}\n`);
-      return;
-    }
-
-    // Wypisywanie standardowego tekstu poza blokiem kodu
-    process.stdout.write(line + '\n');
   }
 
   flush() {
-    if (this.buffer) {
-      if (this.inCodeBlock) {
-        const numStr = (this.lineNumber++).toString().padStart(3, ' ');
-        process.stdout.write(`${chalk.dim('│')} ${chalk.dim(numStr)} ${chalk.dim('│')} ${highlightCode(this.buffer, this.currentLang)}\n`);
-        const border = '─'.repeat(this.width - 2);
-        process.stdout.write(`${chalk.dim('╰' + border + '╯')}\n`);
-      } else {
-        process.stdout.write(this.buffer);
-      }
-      this.buffer = '';
+    if (this.inCodeBlock && this.lineBuffer) {
+      const line = this.lineBuffer.replace(/\r?\n$/, '');
+      const numStr = (this.lineNumber++).toString().padStart(3, ' ');
+      const hl = highlightCode(line, this.currentLang);
+      process.stdout.write(`${chalk.dim('│')} ${chalk.dim(numStr)} ${chalk.dim('│')} ${hl}\n`);
+      const border = '─'.repeat(this.width - 2);
+      process.stdout.write(`${chalk.dim('╰' + border + '╯')}\n`);
+      this.inCodeBlock = false;
+      this.lineBuffer = '';
+    } else if (this.lineBuffer) {
+      process.stdout.write(this.lineBuffer);
+      this.lineBuffer = '';
     }
   }
 }

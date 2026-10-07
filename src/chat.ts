@@ -268,7 +268,7 @@ export async function startChat() {
     let fullResponse = '';
 
     const spinner = ora({
-      text: chalk.dim('Thinking...'),
+      text: chalk.cyan('Odpowiedź w toku (myślę)...'),
       color: 'cyan',
       spinner: 'dots',
     }).start();
@@ -314,7 +314,7 @@ export async function startChat() {
       const decoder = new TextDecoder();
       if (!reader) throw new Error('Nie udało się utworzyć strumienia odpowiedzi.');
 
-      let isFirstChunk = true;
+      let isFirstToken = true;
       let buffer = '';
       const streamer = new CodeBoxStreamer();
 
@@ -324,13 +324,6 @@ export async function startChat() {
 
         const text = decoder.decode(value, { stream: true });
         buffer += text;
-
-        if (isFirstChunk) {
-          isFirstChunk = false;
-          timeToFirstTokenMs = Date.now() - startTime;
-          spinner.stop();
-          printStreamHeader();
-        }
 
         // Sprawdź czy pierwsza linia zawiera {"chatId": ...}
         if (buffer.includes('\n') && !activeChatId) {
@@ -345,14 +338,24 @@ export async function startChat() {
           }
         }
 
-        // Streamuj na żywo z formatowaniem okienek kodu
+        // Dopiero gdy mamy rzeczywistą treść od modelu:
         if (buffer) {
+          if (isFirstToken) {
+            isFirstToken = false;
+            timeToFirstTokenMs = Date.now() - startTime;
+            spinner.stop();
+            printStreamHeader();
+          }
+
           streamer.processChunk(buffer);
           fullResponse += buffer;
           buffer = '';
         }
       }
 
+      if (isFirstToken) {
+        spinner.stop();
+      }
       streamer.flush();
 
       const endTime = Date.now();
