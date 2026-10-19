@@ -150,21 +150,33 @@ export const localTools: Record<string, ToolDefinition> = {
 
         const trimmedCmd = command.trim();
 
-        // 1. Sprawdzenie czy komenda znajduje się na białej liście bezpiecznych narzędzi dev
-        const isKnownSafe = KNOWN_SAFE_DEV_PREFIXES.some((prefix) =>
+        // 1. Sprawdzenie czy polecenie zawiera operatory łańcuchowania lub potoków (Chaining & Piping)
+        // Zapobiega bypassom typu "git status && rm -rf /" lub "ls; cat /etc/passwd"
+        const hasChainingOrPiping = /(&&|\|\||[;&|])/.test(trimmedCmd);
+
+        // 2. Sprawdzenie wzorców krytycznie niebezpiecznych i zaciemniania kodu
+        const hasHighRiskPattern = HIGH_RISK_PATTERNS.some((pattern) => pattern.test(trimmedCmd));
+
+        // 3. Sprawdzenie białej listy: komenda jest bezpieczna TYLKO gdy jest pojedynczym, atomowym poleceniem
+        // (brak chaining/piping) i zaczyna się od zaufanego prefiksu dev
+        const isKnownSafe = !hasChainingOrPiping && !hasHighRiskPattern && KNOWN_SAFE_DEV_PREFIXES.some((prefix) =>
           trimmedCmd === prefix || trimmedCmd.startsWith(prefix + ' ')
         );
 
-        // 2. Sprawdzenie czy komenda zawiera wzorce zaciemniania / podwyższonego ryzyka
-        const isHighRisk = HIGH_RISK_PATTERNS.some((pattern) => pattern.test(trimmedCmd));
+        // Każde polecenie łączone (&&, ;, |) lub spoza białej listy jest traktowane jako High-Risk
+        const isHighRisk = hasChainingOrPiping || hasHighRiskPattern || !isKnownSafe;
 
-        // 3. Human-in-the-loop z odpowiednim poziomem ostrzeżenia (zawsze default: false)
-        if (!isKnownSafe || isHighRisk) {
+        // 4. Human-in-the-loop z odpowiednim poziomem ostrzeżenia (zawsze default: false)
+        if (isHighRisk) {
           console.log(chalk.red.bold(`\n🚨  [ALERT BEZPIECZEŃSTWA - POLECENIE PODWYŻSZONEGO RYZYKA]`));
-          console.log(chalk.red(`Polecenie nie znajduje się na liście bezpiecznych narzędzi lub zawiera ryzykowne wzorce:`));
+          if (hasChainingOrPiping) {
+            console.log(chalk.red(`Wykryto łączenie komend shellowych (&&, ;, ||, |). Polecenia wieloetapowe są traktowane jako wysokie ryzyko:`));
+          } else {
+            console.log(chalk.red(`Polecenie nie znajduje się na liście bezpiecznych narzędzi lub zawiera ryzykowne wzorce:`));
+          }
           console.log(chalk.bold.yellow(`    $ ${trimmedCmd}\n`));
         } else {
-          console.log(chalk.cyan.bold(`\n⚙️   [NARZĘDZIE DEWELOPERSKIE] Agent proponuje wykonanie polecenia:`));
+          console.log(chalk.cyan.bold(`\n⚙️   [NARZĘDZIE DEWELOPERSKIE] Agent proponuje wykonanie bezpiecznego polecenia:`));
           console.log(chalk.bold.hex('#10a37f')(`    $ ${trimmedCmd}\n`));
         }
 

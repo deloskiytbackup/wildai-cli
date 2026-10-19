@@ -2,20 +2,58 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { execSync } from 'child_process';
 
 const CONFIG_DIR = path.join(os.homedir(), '.wildai-cli');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 const ENCRYPTION_PREFIX = 'enc:v1:';
+const KEYCHAIN_SERVICE = 'wildai-cli';
+const KEYCHAIN_INDICATOR = 'keychain:macos';
 const SALT = 'wildai-cli-salt-2026-auth';
 
-// Wyprowadzanie deterministycznego klucza maszyny i użytkownika
+// Integracja z natywnym macOS Keychain (Secure Enclave / Login Keychain)
+function saveToKeychain(token: string): boolean {
+  if (process.platform !== 'darwin') return false;
+  try {
+    const user = process.env.USER || os.userInfo().username;
+    // Flaga -U aktualizuje istniejący wpis
+    execSync(`security add-generic-password -a "${user}" -s "${KEYCHAIN_SERVICE}" -w "${token}" -U 2>/dev/null`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function loadFromKeychain(): string | null {
+  if (process.platform !== 'darwin') return null;
+  try {
+    const user = process.env.USER || os.userInfo().username;
+    const stdout = execSync(`security find-generic-password -a "${user}" -s "${KEYCHAIN_SERVICE}" -w 2>/dev/null`, { encoding: 'utf-8' });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function deleteFromKeychain(): boolean {
+  if (process.platform !== 'darwin') return false;
+  try {
+    const user = process.env.USER || os.userInfo().username;
+    execSync(`security delete-generic-password -a "${user}" -s "${KEYCHAIN_SERVICE}" 2>/dev/null`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Wyprowadzanie deterministycznego klucza maszyny i użytkownika (Fallback dla systemów bez Keychain)
 function getMachineKey(): Buffer {
   const seed = `${os.userInfo().username}@${os.hostname()}:${os.platform()}:${process.env.USER || ''}`;
   return crypto.scryptSync(seed, SALT, 32);
 }
 
-// Szyfrowanie tokenu sesji algorytmem AES-256-GCM (ochrona przed plaintext)
+// Szyfrowanie tokenu sesji algorytmem AES-256-GCM
 export function encryptSecret(plainText: string): string {
   if (!plainText) return '';
   const key = getMachineKey();
@@ -30,7 +68,7 @@ export function encryptSecret(plainText: string): string {
 export function decryptSecret(cipherText: string): string {
   if (!cipherText) return '';
   if (!cipherText.startsWith(ENCRYPTION_PREFIX)) {
-    // Wsteczna kompatybilność, jeśli w pliku był stary token w plaintext
+    // Wsteczna kompatybilność, jeśli w pliku był stary token
     return cipherText;
   }
   try {
@@ -80,7 +118,14 @@ export function loadConfig(): CLIConfig {
     const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
     const parsed = JSON.parse(data);
     if (parsed.accessToken) {
-      parsed.accessToken = decryptSecret(parsed.accessToken);
+      if (parsed.accessToken === KEYCHAIN_INDICATOR) {
+        // Bezpieczny odczyt z macOS Keychain
+        const kcToken = loadFromKeychain();
+        parsed.accessToken = kcToken || undefined;
+      } else {
+        // Fallback: odszyfrowanie AES-256-GCM
+        parsed.accessToken = decryptSecret(parsed.accessToken);
+      }
     }
     return { ...DEFAULT_CONFIG, ...parsed };
   } catch {
@@ -92,10 +137,25 @@ export function saveConfig(newConfig: Partial<CLIConfig>) {
   const current = loadConfig();
   const updated = { ...current, ...newConfig };
 
-  // Szyfrujemy token sesji przed zapisem na dysk
+  let tokenToSave = updated.accessToken;
+
+  if (updated.accessToken) {
+    // 1. Próba zapisu w natywnym macOS Keychain (najwyższe bezpieczeństwo systemowe)
+    const savedInKeychain = saveToKeychain(updated.accessToken);
+    if (savedInKeychain) {
+      tokenToSave = KEYCHAIN_INDICATOR; // Żaden token nie ląduje w pliku tekstowym!
+    } else {
+      // 2. Fallback na szyfrowanie AES-256-GCM dla innych środowisk
+      tokenToSave = encryptSecret(updated.accessToken);
+    }
+  } else if (newConfig.accessToken === undefined && current.accessToken) {
+    deleteFromKeychain();
+    tokenToSave = undefined;
+  }
+
   const toSave = {
     ...updated,
-    accessToken: updated.accessToken ? encryptSecret(updated.accessToken) : undefined,
+    accessToken: tokenToSave,
   };
 
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(toSave, null, 2), { encoding: 'utf-8', mode: 0o600 });
