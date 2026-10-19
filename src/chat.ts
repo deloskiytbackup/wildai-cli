@@ -1,4 +1,4 @@
-import { input, select } from '@inquirer/prompts';
+import { input, select, confirm } from '@inquirer/prompts';
 import { loadConfig, saveConfig } from './config';
 import { 
   printBanner, 
@@ -250,13 +250,32 @@ export async function startChat() {
     // Przygotowanie promptu z utwardzonym kontekstem agenta przeciw Prompt Injection
     let requestMessages = [...messages];
     if (agentMode) {
-      const toolsPrompt = `Jesteś autonomicznym agentem deweloperskim w CLI WildAI.
-DOSTĘPNE NARZĘDZIA: readFile, writeFile, listDirectory, runCommand, gitStatus.
+      const toolsPrompt = `Jesteś autonomicznym agentem inżynierii oprogramowania WildAI działającym w CLI bezpośrednio na maszynie użytkownika.
+TWOIM GŁÓWNYM CELEM JEST TWORZENIE I MODYFIKACJA PLIKÓW NA DYSKU ORAZ URUCHAMIANIE KOMEND — A NIE TYLKO PISANIE KODU W CZACIE!
+
+ZASADY POSTĘPOWANIA W TRYBIE AGENTA:
+1. TWORZENIE / EDYCJA PLIKÓW:
+   Gdy użytkownik prosi o napisanie, stworzenie, przepisanie, refaktoryzację lub aktualizację programu, skryptu czy konfiguracji:
+   - NIE wypisuj długiego kodu w czacie jako blok tekstu markdown!
+   - ZAWSZE użyj narzędzia "writeFile", aby zapisać plik bezpośrednio na dysku użytkownika:
+     [TOOL: writeFile {"filePath": "nazwa_pliku.rozszerzenie", "content": "pelna_zawartosc_kodu"}]
+
+2. URUCHAMIANIE PROGRAMÓW I TESTÓW:
+   - Zawsze użyj narzędzia "runCommand":
+     [TOOL: runCommand {"command": "python3 plik.py"}]
+
+3. ODCZYT PLIKÓW:
+   - Aby zbadać projekt lub odczytać kod:
+     [TOOL: readFile {"filePath": "plik.ext"}] lub [TOOL: listDirectory {"dirPath": "."}]
+
 BEZWZGLĘDNE REGUŁY BEZPIECZEŃSTWA:
-- Zezwolono Ci na działanie WYŁĄCZNIE w bieżącym katalogu projektu. Próby wyjścia poza katalog projektu (Path Traversal) zostaną natychmiast zablokowane.
-- Zabrania się odczytywania lub modyfikowania plików wrażliwych (.env, klucze SSH, poświadczenia).
-- KAŻDE polecenie shellowe oraz modyfikacja plików podlega bezpośredniej autoryzacji człowieka (Human-in-the-loop).
-- Jeśli chcesz użyć narzędzia, odpowiedz WYŁĄCZNIE w formacie: [TOOL: nazwaNarzedzia { "klucz": "wartosc" }].`;
+- Zezwolono Ci na działanie WYŁĄCZNIE w bieżącym katalogu projektu (Path Traversal jest zabroniony).
+- Zabrania się dotykania plików poufnych (.env, klucze SSH).
+- Każde polecenie i zapis pliku podlega autoryzacji użytkownika (Human-in-the-loop).
+
+FORMAT WYWOŁANIA:
+Napisz jedno krótkie zdanie co robisz (np. "Tworzę plik programu hammer.py na Twoim dysku:"), a zaraz po nim wywołaj narzędzie:
+[TOOL: writeFile {"filePath": "nazwa.ext", "content": "..."}]`;
       requestMessages = [{ role: 'system', content: toolsPrompt }, ...messages];
     }
 
@@ -439,6 +458,52 @@ BEZWZGLĘDNE REGUŁY BEZPIECZEŃSTWA:
               });
             } else {
               printWarning(`Model zażądał nieznanego narzędzia: "${toolName}".`);
+            }
+          }
+        }
+      }
+
+      // Fallback w trybie agenta: jeśli model wypisał kod w czacie zamiast wywołać writeFile
+      if (agentMode && !fullResponse.includes('[TOOL: writeFile')) {
+        const codeBlockRegex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
+        let codeMatch;
+        while ((codeMatch = codeBlockRegex.exec(fullResponse)) !== null) {
+          const lang = codeMatch[1]?.toLowerCase() || '';
+          const codeContent = codeMatch[2]?.trim();
+          if (!codeContent || codeContent.length < 20) continue;
+
+          // Wykrywanie nazwy pliku z pierwszej linii lub z zapytania użytkownika
+          let detectedFilename = '';
+          const firstLine = codeContent.split('\n')[0];
+          const filenameMatch = firstLine.match(/(?:#|\/\/|\/\*)\s*(?:plik:|file:|nazwa:)?\s*([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)/i);
+          if (filenameMatch) {
+            detectedFilename = filenameMatch[1];
+          } else {
+            const userFileMatch = trimmed.match(/(?:plik|file|skrypt|program)\s+([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)/i)
+              || trimmed.match(/([a-zA-Z0-9_.-]+\.(?:py|js|ts|json|sh|html|css|cpp|c|go|rs|txt|md))/i);
+            if (userFileMatch) {
+              detectedFilename = userFileMatch[1];
+            } else if (lang === 'python' || lang === 'py') {
+              detectedFilename = 'main.py';
+            } else if (lang === 'javascript' || lang === 'js') {
+              detectedFilename = 'index.js';
+            } else if (lang === 'typescript' || lang === 'ts') {
+              detectedFilename = 'index.ts';
+            }
+          }
+
+          if (detectedFilename) {
+            console.log(chalk.cyan(`\n💡  [AGENT DETECTOR] Model wygenerował kod w czacie dla: ${chalk.bold.yellow(detectedFilename)}`));
+            const saveNow = await confirm({
+              message: `Czy chcesz zapisać ten kod na swoim dysku do pliku "${detectedFilename}"?`,
+              default: true,
+            });
+            if (saveNow) {
+              const writeTool = localTools['writeFile'];
+              if (writeTool) {
+                const res = await writeTool.execute({ filePath: detectedFilename, content: codeContent });
+                printSuccess(res);
+              }
             }
           }
         }
