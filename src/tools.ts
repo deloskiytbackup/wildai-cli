@@ -13,15 +13,41 @@ export interface ToolDefinition {
   execute: (args: any) => Promise<string>;
 }
 
-// Czarna lista bezwzględnie zablokowanych, niszczycielskich poleceń shellowych
-const BLOCKED_COMMAND_PATTERNS = [
-  /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+|\s+-r\s+|\s+-rf\s+)\//i, // rm -rf /
-  /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+|\s+-r\s+|\s+-rf\s+)~/i,  // rm -rf ~
-  /\bmkfs\b/i,
-  /\bdd\s+if=/i,
-  /:()\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/i, // fork bomb
-  />\s*\/dev\/sd[a-z]/i,
-  /\bchmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+\//i,
+// Biała lista znanych, relatywnie bezpiecznych poleceń deweloperskich (Read-Only / Test / Lint)
+const KNOWN_SAFE_DEV_PREFIXES = [
+  'git status',
+  'git diff',
+  'git log',
+  'git branch',
+  'npm test',
+  'npm run test',
+  'npm run lint',
+  'npm run check',
+  'npx tsc --noEmit',
+  'cargo check',
+  'cargo test',
+  'pytest',
+  'python3 -m unittest',
+  'ls',
+  'pwd',
+];
+
+// Wzorce wysokiego ryzyka, zaciemniania kodu i eskalacji (Obfuscation & Shell Injection)
+const HIGH_RISK_PATTERNS = [
+  /\b(rm|rmdir)\b/i,                     // Usuwanie plików/katalogów
+  /\b(sudo|su|doas)\b/i,                 // Eskalacja uprawnień
+  /\b(sh|bash|zsh|dash|ksh)\b/i,         // Uruchamianie powłok podrzędnych
+  /\b(eval|exec)\b/i,                    // Dynamiczne wykonywanie kodu
+  /\b(curl|wget)\b.*\|\s*(sh|bash|zsh)/i,// Pobieranie i piping do shella
+  /\bbase64\s+(-d|--decode)/i,           // Próby zaciemniania base64
+  /\$HOME|\$\{HOME\}|~(?=\/)/i,          // Odwołania do katalogu domowego
+  /\$\([^\)]+\)|`[^`]+`/i,               // Command substitution $() lub backticks
+  />\s*\/dev\/sd[a-z]/i,                 // Zapis do urządzeń blokowych
+  /\bdd\s+if=/i,                         // Nadpisywanie sektorów
+  /\bmkfs\b/i,                           // Formatowanie dysków
+  /\bchmod\b|\bchown\b/i,                // Zmiana uprawnień
+  /\bfind\b.*-delete/i,                  // Masowe usuwanie plików
+  /\b(python|python3|perl|ruby|node)\s+(-c|-e)\b/i, // Inline kod skryptowy
 ];
 
 // Walidacja ścieżki plikowej przeciw Path Traversal i wyciekowi kluczy
@@ -31,7 +57,7 @@ function getSafePath(targetPath: string): { safePath?: string; error?: string } 
 
   // Blokada wyjścia poza katalog projektu (Path Traversal)
   if (!resolved.startsWith(rootDir)) {
-    return { error: `[BŁĄD BEZPIECZEŃSTWA] Odmowa dostępu: Ścieżka "${targetPath}" wychodzi poza bieżący katalog projektu.` };
+    return { error: `[BŁĄD BEZPIECZEŃSTWA] Odmowa dostępu: Ścieżka "${targetPath}" wychodzi poza bieżący katalog roboczy projektu.` };
   }
 
   // Blokada plików wrażliwych
@@ -66,7 +92,7 @@ export const localTools: Record<string, ToolDefinition> = {
 
   writeFile: {
     name: 'writeFile',
-    description: 'Zapisz lub zaktualizuj plik w bieżącym projekcie (wymaga potwierdzenia użytkownika)',
+    description: 'Zapisz lub zaktualizuj plik w bieżącym projekcie (wymaga potwierdzenia użytkownika, domyślnie: NIE)',
     execute: async ({ filePath, content }: { filePath: string; content: string }) => {
       try {
         const { safePath, error } = getSafePath(filePath);
@@ -75,11 +101,11 @@ export const localTools: Record<string, ToolDefinition> = {
         const exists = fs.existsSync(safePath);
         const actionLabel = exists ? 'nadpisać istniejący plik' : 'utworzyć nowy plik';
 
-        // Human-in-the-loop: Potwierdzenie użytkownika przed zapisem
+        // Human-in-the-loop: Bezpieczne potwierdzenie użytkownika (domyślnie: false)
         console.log(chalk.yellow.bold(`\n⚠️  [BEZPIECZEŃSTWO] Agent chce ${actionLabel}: ${chalk.cyan(filePath)} (${content.length} znaków)`));
         const allow = await confirm({
-          message: `Czy zezwalasz na zapis do "${filePath}"?`,
-          default: true,
+          message: `Czy zezwalasz na zapis do "${filePath}"? (Domyślnie: NIE)`,
+          default: false, // Ściśle false!
         });
 
         if (!allow) {
@@ -115,34 +141,43 @@ export const localTools: Record<string, ToolDefinition> = {
 
   runCommand: {
     name: 'runCommand',
-    description: 'Wykonaj polecenie shellowe w terminalu (wymaga potwierdzenia użytkownika)',
+    description: 'Wykonaj polecenie shellowe w terminalu (podlega analizie ryzyka i zgodzie użytkownika)',
     execute: async ({ command }: { command: string }) => {
       try {
         if (!command || typeof command !== 'string') {
           return 'Błąd: Puste polecenie shellowe.';
         }
 
-        // 1. Sprawdzenie wzorców krytycznie niebezpiecznych
-        for (const pattern of BLOCKED_COMMAND_PATTERNS) {
-          if (pattern.test(command)) {
-            return `[BŁĄD BEZPIECZEŃSTWA] Polecenie zablokowane: Wykryto niebezpieczny wzorzec polecenia destrukcyjnego ("${command}").`;
-          }
+        const trimmedCmd = command.trim();
+
+        // 1. Sprawdzenie czy komenda znajduje się na białej liście bezpiecznych narzędzi dev
+        const isKnownSafe = KNOWN_SAFE_DEV_PREFIXES.some((prefix) =>
+          trimmedCmd === prefix || trimmedCmd.startsWith(prefix + ' ')
+        );
+
+        // 2. Sprawdzenie czy komenda zawiera wzorce zaciemniania / podwyższonego ryzyka
+        const isHighRisk = HIGH_RISK_PATTERNS.some((pattern) => pattern.test(trimmedCmd));
+
+        // 3. Human-in-the-loop z odpowiednim poziomem ostrzeżenia (zawsze default: false)
+        if (!isKnownSafe || isHighRisk) {
+          console.log(chalk.red.bold(`\n🚨  [ALERT BEZPIECZEŃSTWA - POLECENIE PODWYŻSZONEGO RYZYKA]`));
+          console.log(chalk.red(`Polecenie nie znajduje się na liście bezpiecznych narzędzi lub zawiera ryzykowne wzorce:`));
+          console.log(chalk.bold.yellow(`    $ ${trimmedCmd}\n`));
+        } else {
+          console.log(chalk.cyan.bold(`\n⚙️   [NARZĘDZIE DEWELOPERSKIE] Agent proponuje wykonanie polecenia:`));
+          console.log(chalk.bold.hex('#10a37f')(`    $ ${trimmedCmd}\n`));
         }
 
-        // 2. Human-in-the-loop: Obowiązkowe potwierdzenie użytkownika
-        console.log(chalk.red.bold(`\n🚨  [BEZPIECZEŃSTWO] Agent żąda wykonania komendy shellowej:`));
-        console.log(chalk.bold.hex('#10a37f')(`    $ ${command}\n`));
-
         const allow = await confirm({
-          message: `Czy zezwalasz na uruchomienie tego polecenia w terminalu?`,
-          default: false,
+          message: `Czy świadomie zezwalasz na uruchomienie tego polecenia? (Domyślnie: NIE)`,
+          default: false, // Zawsze domyślnie false!
         });
 
         if (!allow) {
-          return `Operacja zablokowana: Użytkownik odrzucił wykonanie polecenia "${command}".`;
+          return `Operacja zablokowana: Użytkownik odrzucił wykonanie polecenia "${trimmedCmd}".`;
         }
 
-        const { stdout, stderr } = await execAsync(command, { cwd: process.cwd(), timeout: 30000 });
+        const { stdout, stderr } = await execAsync(trimmedCmd, { cwd: process.cwd(), timeout: 30000 });
         return (stdout || stderr || 'Polecenie zakończone bez wyjścia.').trim();
       } catch (err: any) {
         return `Błąd wykonania: ${err.message}`;

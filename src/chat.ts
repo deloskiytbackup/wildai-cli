@@ -392,42 +392,54 @@ BEZWZGLĘDNE REGUŁY BEZPIECZEŃSTWA:
       lastAssistantResponse = fullResponse;
       messages.push({ role: 'assistant', content: fullResponse });
 
-      // Bezpieczne parsowanie i obsługa narzędzi w trybie agenta
+      // Bezpieczne parsowanie i obsługa narzędzi w trybie agenta z limitem wywołań (Tool Budget)
+      const MAX_TOOL_CALLS_PER_PROMPT = 3;
       if (agentMode && fullResponse.includes('[TOOL:')) {
         const toolMatch = fullResponse.match(/\[TOOL:\s*(\w+)\s*(\{[\s\S]*?\})\s*\]/);
         if (toolMatch) {
           const toolName = toolMatch[1];
           const rawArgs = toolMatch[2];
-          let toolArgs: any = {};
-          try {
-            toolArgs = JSON.parse(rawArgs);
-          } catch {
-            try {
-              // Bezpieczne parsowanie kluczy bez eval
-              const sanitized = rawArgs
-                .replace(/'/g, '"')
-                .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":');
-              toolArgs = JSON.parse(sanitized);
-            } catch {}
-          }
 
-          const tool = localTools[toolName];
-          if (tool) {
-            console.log(chalk.cyan(`\n╭─ WYWOŁANIE NARZĘDZIA PRZEZ AGENTA ─────────────────────────╮`));
-            console.log(`│ Narzędzie: ${chalk.bold.yellow(toolName)}`);
-            console.log(chalk.cyan(`╰────────────────────────────────────────────────────────────╯`));
-            
-            const toolResult = await tool.execute(toolArgs);
-            console.log(chalk.dim(`\n--- Wynik narzędzia (${toolName}) ---`));
-            console.log(toolResult.substring(0, 400) + (toolResult.length > 400 ? '...' : ''));
-            console.log(chalk.dim(`------------------------------------\n`));
-
+          // Ochrona przed pętlą wywołań narzędzi
+          const recentToolCalls = messages.filter((m) => m.role === 'system' && m.content.startsWith('Wynik wykonania narzędzia')).length;
+          if (recentToolCalls >= MAX_TOOL_CALLS_PER_PROMPT) {
+            printWarning(`\n⚠️  [LIMIT AGENTA] Osiągnięto maksymalny limit wywołań narzędzi (${MAX_TOOL_CALLS_PER_PROMPT}) na to zapytanie. Zatrzymano pętlę agenta, aby zapobiec zapętleniu.`);
             messages.push({
               role: 'system',
-              content: `Wynik wykonania narzędzia ${toolName}: ${toolResult}`,
+              content: `Limit wywołań narzędzi (${MAX_TOOL_CALLS_PER_PROMPT}) na to zapytanie został osiągnięty. Podsumuj dotychczasowe działania dla użytkownika.`,
             });
           } else {
-            printWarning(`Model zażądał nieznanego narzędzia: "${toolName}".`);
+            let toolArgs: any = {};
+            try {
+              toolArgs = JSON.parse(rawArgs);
+            } catch {
+              try {
+                // Bezpieczne parsowanie kluczy bez eval
+                const sanitized = rawArgs
+                  .replace(/'/g, '"')
+                  .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":');
+                toolArgs = JSON.parse(sanitized);
+              } catch {}
+            }
+
+            const tool = localTools[toolName];
+            if (tool) {
+              console.log(chalk.cyan(`\n╭─ WYWOŁANIE NARZĘDZIA PRZEZ AGENTA [${recentToolCalls + 1}/${MAX_TOOL_CALLS_PER_PROMPT}] ───────────────╮`));
+              console.log(`│ Narzędzie: ${chalk.bold.yellow(toolName)}`);
+              console.log(chalk.cyan(`╰────────────────────────────────────────────────────────────╯`));
+              
+              const toolResult = await tool.execute(toolArgs);
+              console.log(chalk.dim(`\n--- Wynik narzędzia (${toolName}) ---`));
+              console.log(toolResult.substring(0, 400) + (toolResult.length > 400 ? '...' : ''));
+              console.log(chalk.dim(`------------------------------------\n`));
+
+              messages.push({
+                role: 'system',
+                content: `Wynik wykonania narzędzia ${toolName}: ${toolResult}`,
+              });
+            } else {
+              printWarning(`Model zażądał nieznanego narzędzia: "${toolName}".`);
+            }
           }
         }
       }
