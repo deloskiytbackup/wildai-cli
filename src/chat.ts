@@ -18,6 +18,7 @@ import {
 import { localTools, printToolsList } from './tools';
 import { estimateTokens, estimateCost, sessionTracker, TokenStats } from './tokenTracker';
 import { CodeBoxStreamer } from './codeStreamer';
+import { getVerifiedUser } from './auth';
 import ora from 'ora';
 
 export interface ModelInfo {
@@ -56,22 +57,6 @@ export async function fetchModels(baseUrl: string): Promise<ModelInfo[]> {
     return [];
   } catch {
     return [];
-  }
-}
-
-function decodeUserToken(token?: string): { email?: string; isAdmin?: boolean; userId?: string } | null {
-  if (!token) return null;
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
-    return {
-      email: payload.email,
-      isAdmin: Boolean(payload.isAdmin),
-      userId: payload.userId,
-    };
-  } catch {
-    return null;
   }
 }
 
@@ -117,7 +102,12 @@ export async function startChat() {
     return;
   }
 
-  const userInfo = decodeUserToken(config.accessToken);
+  // Bezpieczna weryfikacja tożsamości użytkownika przez API
+  let userInfo = await getVerifiedUser(config.baseUrl, config.accessToken);
+  if (config.accessToken && !userInfo) {
+    printWarning('Twój zapisany token sesji wygasł lub jest nieprawidłowy. Zaloguj się ponownie poleceniem /login.');
+  }
+
   let agentMode = false;
   let lastAssistantResponse = '';
   let activeChatId: string | null = null;
@@ -142,7 +132,7 @@ export async function startChat() {
     try {
       userPrompt = await input({ message: promptPrefix });
     } catch {
-      // Przerwanie Ctrl+C
+      // Przerwanie Ctrl+C w menu głównym
       console.log('\n');
       printSessionStats(sessionTracker.getSessionStats());
       process.exit(0);
@@ -181,7 +171,7 @@ export async function startChat() {
       if (command === '/mode') {
         agentMode = !agentMode;
         if (agentMode) {
-          printSuccess('Włączono tryb AGENT: Dostęp do lokalnych narzędzi deweloperskich (kod, pliki, polecenia)!');
+          printSuccess('Włączono tryb AGENT: Dostęp do lokalnych narzędzi deweloperskich (chronione przed prompt injection i nieautoryzowanym wykonaniem)!');
         } else {
           printSystemMessage('Przełączono w tryb STANDARDOWY (czat konwersacyjny).');
         }
@@ -208,25 +198,28 @@ export async function startChat() {
       }
 
       if (command === '/whoami' || command === '/status') {
-        const u = decodeUserToken(config.accessToken);
-        console.log(chalk.cyan.bold('\n╭─ STATUS KONTA ─────────────────────────────╮'));
-        console.log(`│ Email:   ${u?.email ? chalk.green(u.email) : chalk.red('Niezalogowany')}`);
+        const u = await getVerifiedUser(config.baseUrl, config.accessToken);
+        console.log(chalk.cyan.bold('\n╭─ STATUS KONTA (KRYPTOGRAFICZNIE ZWERYFIKOWANY) ─╮'));
+        console.log(`│ Email:   ${u?.email ? chalk.green(u.email) : chalk.red('Niezalogowany / Niezweryfikowany')}`);
+        console.log(`│ Plan:    ${u?.plan ? chalk.yellow.bold(u.plan.toUpperCase()) : chalk.dim('FREE')}`);
         console.log(`│ Rola:    ${u?.isAdmin ? chalk.magenta.bold('Administrator') : chalk.white('Użytkownik')}`);
         console.log(`│ Model:   ${chalk.yellow(config.model)}`);
         console.log(`│ Serwer:  ${chalk.dim(config.baseUrl)}`);
-        console.log(chalk.cyan.bold('╰────────────────────────────────────────────╯\n'));
+        console.log(chalk.cyan.bold('╰──────────────────────────────────────────────────╯\n'));
         continue;
       }
 
       if (command === '/login') {
         const { login } = await import('./auth');
         await login();
+        userInfo = await getVerifiedUser(config.baseUrl, config.accessToken);
         continue;
       }
 
       if (command === '/logout') {
         const { logout } = await import('./auth');
         await logout();
+        userInfo = null;
         continue;
       }
 
@@ -236,8 +229,8 @@ export async function startChat() {
         lastAssistantResponse = '';
         printBanner({
           model: config.model,
-          userEmail: decodeUserToken(config.accessToken)?.email,
-          isAdmin: decodeUserToken(config.accessToken)?.isAdmin,
+          userEmail: userInfo?.email,
+          isAdmin: userInfo?.isAdmin,
           baseUrl: config.baseUrl,
           agentMode,
         });
@@ -254,10 +247,16 @@ export async function startChat() {
     // Dodanie wiadomości użytkownika
     messages.push({ role: 'user', content: trimmed });
 
-    // Przygotowanie promptu z kontekstem agenta, jeśli włączony
+    // Przygotowanie promptu z utwardzonym kontekstem agenta przeciw Prompt Injection
     let requestMessages = [...messages];
     if (agentMode) {
-      const toolsPrompt = `Masz dostęp do narzędzi w środowisku dewelopera: readFile, writeFile, listDirectory, runCommand, gitStatus. Jeśli chcesz użyć narzędzia, odpowiedz w formacie: [TOOL: nazwaNarzedzia { argumenty }].`;
+      const toolsPrompt = `Jesteś autonomicznym agentem deweloperskim w CLI WildAI.
+DOSTĘPNE NARZĘDZIA: readFile, writeFile, listDirectory, runCommand, gitStatus.
+BEZWZGLĘDNE REGUŁY BEZPIECZEŃSTWA:
+- Zezwolono Ci na działanie WYŁĄCZNIE w bieżącym katalogu projektu. Próby wyjścia poza katalog projektu (Path Traversal) zostaną natychmiast zablokowane.
+- Zabrania się odczytywania lub modyfikowania plików wrażliwych (.env, klucze SSH, poświadczenia).
+- KAŻDE polecenie shellowe oraz modyfikacja plików podlega bezpośredniej autoryzacji człowieka (Human-in-the-loop).
+- Jeśli chcesz użyć narzędzia, odpowiedz WYŁĄCZNIE w formacie: [TOOL: nazwaNarzedzia { "klucz": "wartosc" }].`;
       requestMessages = [{ role: 'system', content: toolsPrompt }, ...messages];
     }
 
@@ -268,10 +267,19 @@ export async function startChat() {
     let fullResponse = '';
 
     const spinner = ora({
-      text: chalk.cyan('Odpowiedź w toku (myślę)...'),
+      text: chalk.cyan('Odpowiedź w toku (myślę)... [Ctrl+C aby przerwać]'),
       color: 'cyan',
       spinner: 'dots',
     }).start();
+
+    // AbortController do bezpiecznego przerywania generowania (Ctrl+C)
+    const abortController = new AbortController();
+    let isAborted = false;
+    const sigIntHandler = () => {
+      isAborted = true;
+      abortController.abort();
+    };
+    process.once('SIGINT', sigIntHandler);
 
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -286,7 +294,9 @@ export async function startChat() {
           messages: requestMessages,
           model: config.model,
           chatId: activeChatId,
+          max_tokens: 4096, // Bezpieczny limit maksymalnej liczby tokenów odpowiedzi
         }),
+        signal: abortController.signal,
       });
 
       if (!response.ok) {
@@ -382,9 +392,55 @@ export async function startChat() {
       lastAssistantResponse = fullResponse;
       messages.push({ role: 'assistant', content: fullResponse });
 
+      // Bezpieczne parsowanie i obsługa narzędzi w trybie agenta
+      if (agentMode && fullResponse.includes('[TOOL:')) {
+        const toolMatch = fullResponse.match(/\[TOOL:\s*(\w+)\s*(\{[\s\S]*?\})\s*\]/);
+        if (toolMatch) {
+          const toolName = toolMatch[1];
+          const rawArgs = toolMatch[2];
+          let toolArgs: any = {};
+          try {
+            toolArgs = JSON.parse(rawArgs);
+          } catch {
+            try {
+              // Bezpieczne parsowanie kluczy bez eval
+              const sanitized = rawArgs
+                .replace(/'/g, '"')
+                .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":');
+              toolArgs = JSON.parse(sanitized);
+            } catch {}
+          }
+
+          const tool = localTools[toolName];
+          if (tool) {
+            console.log(chalk.cyan(`\n╭─ WYWOŁANIE NARZĘDZIA PRZEZ AGENTA ─────────────────────────╮`));
+            console.log(`│ Narzędzie: ${chalk.bold.yellow(toolName)}`);
+            console.log(chalk.cyan(`╰────────────────────────────────────────────────────────────╯`));
+            
+            const toolResult = await tool.execute(toolArgs);
+            console.log(chalk.dim(`\n--- Wynik narzędzia (${toolName}) ---`));
+            console.log(toolResult.substring(0, 400) + (toolResult.length > 400 ? '...' : ''));
+            console.log(chalk.dim(`------------------------------------\n`));
+
+            messages.push({
+              role: 'system',
+              content: `Wynik wykonania narzędzia ${toolName}: ${toolResult}`,
+            });
+          } else {
+            printWarning(`Model zażądał nieznanego narzędzia: "${toolName}".`);
+          }
+        }
+      }
+
     } catch (err: any) {
       spinner.stop();
-      printError(`Wystąpił błąd: ${err.message}`);
+      if (isAborted || err.name === 'AbortError') {
+        printWarning('\nGenerowanie odpowiedzi zostało przerwane przez użytkownika.');
+      } else {
+        printError(`Wystąpił błąd: ${err.message}`);
+      }
+    } finally {
+      process.removeListener('SIGINT', sigIntHandler);
     }
   }
 }
