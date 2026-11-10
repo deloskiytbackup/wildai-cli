@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { startChat, fetchModels, selectModel, generateAndSaveImage } from './chat';
+import { startChat, fetchModels, selectModel, generateAndSaveImage, createCliChat, formatCliChatTitle, selectChatFromHistory } from './chat';
 import { loadConfig, saveConfig, DEFAULT_CONFIG } from './config';
 import { login, logout } from './auth';
 import { printSystemMessage, printSuccess, printError, printPlanUpgradeNotice, getChalk, getProviderBadge, printStreamHeader, printStreamFooter } from './ui';
@@ -12,14 +12,20 @@ const program = new Command();
 
 program
   .name('wildai')
-  .description('Oficjalne, nowoczesne CLI v2.0 dla ekosystemu WildAI (tryb myślenia CoT, agent, obrazy i tokeny)')
-  .version('2.0.0');
+  .description('Oficjalne, nowoczesne CLI v2.1 dla ekosystemu WildAI (CLI Project, historia czatów, tryb myślenia CoT, agent i obrazy)')
+  .version('2.1.0');
 
 // Główna komenda lub pojedynczy prompt
 program
   .argument('[prompt...]', 'Opcjonalne bezpośrednie pytanie do AI (tryb one-shot)')
   .option('-t, --think', 'Włącz tryb głębokiego myślenia (Chain-of-Thought)')
-  .action(async (promptParts: string[], options: { think?: boolean }) => {
+  .option('-r, --resume', 'Wybierz i wznów rozmowę z historii czatów')
+  .action(async (promptParts: string[], options: { think?: boolean; resume?: boolean }) => {
+    if (options?.resume && (!promptParts || promptParts.length === 0)) {
+      await startChat({ openHistory: true });
+      return;
+    }
+
     if (promptParts && promptParts.length > 0) {
       const userPrompt = promptParts.join(' ');
       const config = loadConfig();
@@ -38,6 +44,17 @@ program
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (config.accessToken) headers['Authorization'] = `Bearer ${config.accessToken}`;
 
+        let oneShotChatId: string | null = null;
+        if (config.accessToken) {
+          const created = await createCliChat(
+            config.baseUrl,
+            formatCliChatTitle(userPrompt.substring(0, 30)),
+            config.model,
+            config.accessToken
+          );
+          if (created) oneShotChatId = created.id;
+        }
+
         const res = await fetch(config.baseUrl, {
           method: 'POST',
           headers,
@@ -45,7 +62,8 @@ program
             messages: [{ role: 'user', content: userPrompt }],
             model: config.model,
             isReasoning,
-            chatId: null,
+            source: 'cli',
+            chatId: oneShotChatId,
           }),
         });
 
@@ -138,8 +156,23 @@ program
 program
   .command('chat')
   .description('Uruchom interaktywny czat w terminalu (pełny interfejs)')
+  .option('-r, --resume', 'Wybierz rozmowę z historii czatów przed startem')
+  .action(async (opts: { resume?: boolean }) => {
+    await startChat({ openHistory: Boolean(opts?.resume) });
+  });
+
+program
+  .command('history')
+  .alias('chats')
+  .description('Przeglądaj historię swoich czatów (CLI Project & Web) i wznów wybraną rozmowę')
   .action(async () => {
-    await startChat();
+    const picked = await selectChatFromHistory();
+    if (!picked) return;
+    if (picked === '__NEW__') {
+      await startChat();
+      return;
+    }
+    await startChat({ resumeChatId: picked });
   });
 
 program

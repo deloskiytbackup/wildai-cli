@@ -33,6 +33,165 @@ export interface ModelInfo {
   minPlan?: string;
 }
 
+export interface ChatSummary {
+  id: string;
+  title: string;
+  model: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatDetail extends ChatSummary {
+  messages: {
+    id: string;
+    role: string;
+    content: string;
+    createdAt: string;
+  }[];
+}
+
+export function formatCliChatTitle(rawTitle: string): string {
+  const cleaned = (rawTitle || '').trim() || 'Nowa rozmowa';
+  if (cleaned.toLowerCase().startsWith('cli-')) {
+    return `cli-${cleaned.slice(4).trim() || 'Nowa rozmowa'}`;
+  }
+  return `cli-${cleaned}`;
+}
+
+export async function fetchUserChats(baseUrl: string, accessToken?: string): Promise<ChatSummary[]> {
+  if (!accessToken) return [];
+  try {
+    const origin = new URL(baseUrl).origin;
+    const res = await fetch(`${origin}/api/chats?t=${Date.now()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchChatById(baseUrl: string, chatId: string, accessToken?: string): Promise<ChatDetail | null> {
+  if (!accessToken || !chatId) return null;
+  try {
+    const origin = new URL(baseUrl).origin;
+    const res = await fetch(`${origin}/api/chats/${chatId}?t=${Date.now()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function createCliChat(
+  baseUrl: string,
+  rawTitle: string,
+  model: string,
+  accessToken?: string
+): Promise<ChatSummary | null> {
+  if (!accessToken) return null;
+  try {
+    const origin = new URL(baseUrl).origin;
+    const title = formatCliChatTitle(rawTitle);
+    const res = await fetch(`${origin}/api/chats`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ title, model }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function renameCliChat(
+  baseUrl: string,
+  chatId: string,
+  newTitle: string,
+  accessToken?: string
+): Promise<string | null> {
+  if (!accessToken || !chatId) return null;
+  try {
+    const origin = new URL(baseUrl).origin;
+    const title = formatCliChatTitle(newTitle);
+    const res = await fetch(`${origin}/api/chats/${chatId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) return null;
+    return title;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteUserChat(
+  baseUrl: string,
+  chatId: string,
+  accessToken?: string
+): Promise<boolean> {
+  if (!accessToken || !chatId) return false;
+  try {
+    const origin = new URL(baseUrl).origin;
+    const res = await fetch(`${origin}/api/chats/${chatId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function renderLoadedChatMessages(chat: ChatDetail) {
+  const chalk = getChalk();
+  const width = Math.min(process.stdout.columns || 76, 76);
+  const border = '─'.repeat(Math.max(10, width - 2));
+  console.log(chalk.cyan.bold(`\n╭${border}╮`));
+  console.log(
+    chalk.cyan.bold(`│ `) +
+      chalk.bold.white(`📜 WZNOWIONO CZAT: `) +
+      chalk.bold.green(chat.title) +
+      chalk.dim(` (${chat.messages?.length || 0} wiadomości)`)
+  );
+  console.log(chalk.cyan.bold(`╰${border}╯\n`));
+
+  const msgs = chat.messages || [];
+  const recent = msgs.slice(-12);
+  if (msgs.length > recent.length) {
+    console.log(chalk.dim(`  ... pominięto ${msgs.length - recent.length} starszych wiadomości ...\n`));
+  }
+
+  for (const m of recent) {
+    if (m.role === 'user') {
+      console.log(chalk.bold.cyan('❯ Ty: ') + chalk.white(m.content));
+      console.log('');
+    } else if (m.role === 'assistant') {
+      const cleaned = (m.content || '')
+        .replace(/<think[^>]*>[\s\S]*?<\/think>\s*/gi, '')
+        .replace(/\[\[THINK\]\][\s\S]*?\[\[\/THINK\]\]\s*/gi, '')
+        .replace(/<steps[^>]*>[\s\S]*?<\/steps>\s*/gi, '')
+        .trim();
+      console.log(chalk.bold.hex('#10a37f')('✦ WildAI: ') + chalk.gray(cleaned.substring(0, 600) + (cleaned.length > 600 ? '...' : '')));
+      console.log(chalk.dim('─'.repeat(40)));
+    }
+  }
+}
+
 export async function generateAndSaveImage(promptText: string) {
   const config = loadConfig();
   const chalk = getChalk();
@@ -156,7 +315,55 @@ export async function selectModel() {
   printSuccess(`Zmieniono model na: ${chalk.bold.hex('#10a37f')(chosen)}`);
 }
 
-export async function startChat() {
+export async function selectChatFromHistory(): Promise<string | null> {
+  const config = loadConfig();
+  const chalk = getChalk();
+  if (!config.accessToken) {
+    printWarning('Musisz być zalogowany, aby przeglądać historię czatów. Użyj komendy: wildai login');
+    return null;
+  }
+
+  printSystemMessage('Pobieranie historii Twoich czatów z WildAI...');
+  const chats = await fetchUserChats(config.baseUrl, config.accessToken);
+
+  if (chats.length === 0) {
+    printWarning('Brak zapisanych czatów na Twoim koncie.');
+    return null;
+  }
+
+  const choices: any[] = [
+    {
+      name: chalk.bold.green('➕ Utwórz nową rozmowę w CLI (cli-...)'),
+      value: '__NEW__',
+    },
+    ...chats.map((c) => {
+      const isCli = (c.title || '').toLowerCase().startsWith('cli-');
+      const sourceBadge = isCli ? chalk.cyan.bold('[CLI]') : chalk.dim('[WEB]');
+      const modelBadge = getProviderBadge(c.model || '');
+      const dateStr = c.updatedAt ? new Date(c.updatedAt).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '';
+      return {
+        name: `${sourceBadge} ${chalk.bold.white((c.title || 'Nowa rozmowa').padEnd(34).substring(0, 34))} ${modelBadge} ${chalk.dim(dateStr)}`,
+        value: c.id,
+        description: `ID: ${c.id} • Model: ${c.model}`,
+      };
+    }),
+    {
+      name: chalk.dim('↩ Anuluj / Wyjdź'),
+      value: '__CANCEL__',
+    },
+  ];
+
+  const chosen = await select({
+    message: 'Wybierz rozmowę z historii (📁 CLI Project & Web):',
+    choices,
+    pageSize: 14,
+  });
+
+  if (chosen === '__CANCEL__') return null;
+  return chosen;
+}
+
+export async function startChat(options?: { resumeChatId?: string; openHistory?: boolean }) {
   const chalk = getChalk();
   let config = loadConfig();
 
@@ -177,6 +384,28 @@ export async function startChat() {
   let isReasoning = false;
   let lastAssistantResponse = '';
   let activeChatId: string | null = null;
+  let activeChatTitle: string | null = null;
+  const messages: any[] = [];
+
+  if (options?.openHistory && !options?.resumeChatId) {
+    const picked = await selectChatFromHistory();
+    if (picked && picked !== '__NEW__') {
+      options.resumeChatId = picked;
+    }
+  }
+
+  if (options?.resumeChatId && config.accessToken) {
+    const loaded = await fetchChatById(config.baseUrl, options.resumeChatId, config.accessToken);
+    if (loaded) {
+      activeChatId = loaded.id;
+      activeChatTitle = loaded.title;
+      for (const m of loaded.messages || []) {
+        messages.push({ role: m.role, content: m.content });
+      }
+      const lastAss = [...(loaded.messages || [])].reverse().find((m) => m.role === 'assistant');
+      if (lastAss) lastAssistantResponse = lastAss.content;
+    }
+  }
 
   // Wyświetl powitalny banner ze statystykami
   console.clear();
@@ -187,14 +416,26 @@ export async function startChat() {
     baseUrl: config.baseUrl,
     agentMode,
     isReasoning,
+    chatTitle: activeChatTitle,
   });
 
-  const messages: any[] = [];
+  if (activeChatId && messages.length > 0) {
+    renderLoadedChatMessages({
+      id: activeChatId,
+      title: activeChatTitle || 'cli-rozmowa',
+      model: config.model,
+      createdAt: '',
+      updatedAt: '',
+      messages: messages.map((m, i) => ({ id: String(i), role: m.role, content: m.content, createdAt: '' })),
+    });
+  }
 
   while (true) {
     config = loadConfig();
+    const chatBadge = activeChatTitle ? chalk.cyan(`[${activeChatTitle.substring(0, 22)}] `) : '';
     const promptPrefix =
       chalk.bold.cyan('❯ ') +
+      chatBadge +
       (agentMode ? chalk.dim('[agent] ') : '') +
       (isReasoning ? chalk.magenta('[myślenie] ') : '');
     let userPrompt = '';
@@ -225,6 +466,101 @@ export async function startChat() {
 
       if (command === '/help') {
         printHelp();
+        continue;
+      }
+
+      if (command === '/history' || command === '/chats') {
+        const picked = await selectChatFromHistory();
+        if (!picked) continue;
+        if (picked === '__NEW__') {
+          activeChatId = null;
+          activeChatTitle = null;
+          messages.length = 0;
+          lastAssistantResponse = '';
+          printSuccess('Rozpoczęto nową rozmowę CLI (kolejna wiadomość utworzy czat z prefiksem cli-).');
+          continue;
+        }
+        const loaded = await fetchChatById(config.baseUrl, picked, config.accessToken);
+        if (!loaded) {
+          printError('Nie udało się wczytać wybranego czatu.');
+          continue;
+        }
+        activeChatId = loaded.id;
+        activeChatTitle = loaded.title;
+        messages.length = 0;
+        for (const m of loaded.messages || []) {
+          messages.push({ role: m.role, content: m.content });
+        }
+        const lastAss = [...(loaded.messages || [])].reverse().find((m) => m.role === 'assistant');
+        lastAssistantResponse = lastAss ? lastAss.content : '';
+        console.clear();
+        printBanner({
+          model: config.model,
+          userEmail: userInfo?.email,
+          isAdmin: userInfo?.isAdmin,
+          baseUrl: config.baseUrl,
+          agentMode,
+          isReasoning,
+          chatTitle: activeChatTitle,
+        });
+        renderLoadedChatMessages(loaded);
+        continue;
+      }
+
+      if (command === '/new') {
+        messages.length = 0;
+        lastAssistantResponse = '';
+        if (arg && config.accessToken) {
+          const created = await createCliChat(config.baseUrl, arg, config.model, config.accessToken);
+          if (created) {
+            activeChatId = created.id;
+            activeChatTitle = created.title;
+            printSuccess(`Utworzono nowy czat w CLI Project: ${chalk.bold.cyan(activeChatTitle)}`);
+            continue;
+          }
+        }
+        activeChatId = null;
+        activeChatTitle = arg ? formatCliChatTitle(arg) : null;
+        printSuccess(`Rozpoczęto nową rozmowę${activeChatTitle ? `: ${chalk.bold.cyan(activeChatTitle)}` : ' (cli-...)'}.`);
+        continue;
+      }
+
+      if (command === '/rename') {
+        if (!arg) {
+          printWarning('Podaj nową nazwę czatu, np.: /rename refaktoryzacja-api');
+          continue;
+        }
+        const formatted = formatCliChatTitle(arg);
+        if (activeChatId && config.accessToken) {
+          const updated = await renameCliChat(config.baseUrl, activeChatId, formatted, config.accessToken);
+          if (updated) {
+            activeChatTitle = updated;
+            printSuccess(`Zmieniono nazwę czatu na: ${chalk.bold.cyan(activeChatTitle)}`);
+          } else {
+            printError('Nie udało się zmienić nazwy czatu na serwerze.');
+          }
+        } else {
+          activeChatTitle = formatted;
+          printSuccess(`Ustawiono nazwę czatu na: ${chalk.bold.cyan(activeChatTitle)}`);
+        }
+        continue;
+      }
+
+      if (command === '/delete') {
+        if (!activeChatId || !config.accessToken) {
+          printWarning('Brak aktywnego zapisanego czatu do usunięcia.');
+          continue;
+        }
+        const ok = await deleteUserChat(config.baseUrl, activeChatId, config.accessToken);
+        if (ok) {
+          printSuccess(`Usunięto czat "${activeChatTitle || activeChatId}" z historii.`);
+          activeChatId = null;
+          activeChatTitle = null;
+          messages.length = 0;
+          lastAssistantResponse = '';
+        } else {
+          printError('Nie udało się usunąć czatu.');
+        }
         continue;
       }
 
@@ -312,6 +648,8 @@ export async function startChat() {
         console.clear();
         messages.length = 0;
         lastAssistantResponse = '';
+        activeChatId = null;
+        activeChatTitle = null;
         printBanner({
           model: config.model,
           userEmail: userInfo?.email,
@@ -319,6 +657,7 @@ export async function startChat() {
           baseUrl: config.baseUrl,
           agentMode,
           isReasoning,
+          chatTitle: activeChatTitle,
         });
         printSuccess('Pamięć czatu i ekran zostały wyczyszczone.');
         continue;
@@ -392,6 +731,16 @@ Napisz jedno krótkie zdanie co robisz (np. "Tworzę plik programu hammer.py na 
         headers['Authorization'] = `Bearer ${config.accessToken}`;
       }
 
+      // Automatyczne utworzenie czatu z prefiksem cli- dla folderu CLI Project
+      const desiredCliTitle = formatCliChatTitle(activeChatTitle || trimmed.substring(0, 30));
+      if (!activeChatId && config.accessToken) {
+        const created = await createCliChat(config.baseUrl, desiredCliTitle, config.model, config.accessToken);
+        if (created) {
+          activeChatId = created.id;
+          activeChatTitle = created.title;
+        }
+      }
+
       const response = await fetch(config.baseUrl, {
         method: 'POST',
         headers,
@@ -400,6 +749,7 @@ Napisz jedno krótkie zdanie co robisz (np. "Tworzę plik programu hammer.py na 
           model: config.model,
           chatId: activeChatId,
           isReasoning,
+          source: 'cli',
           max_tokens: 4096, // Bezpieczny limit maksymalnej liczby tokenów odpowiedzi
         }),
         signal: abortController.signal,
@@ -431,6 +781,7 @@ Napisz jedno krótkie zdanie co robisz (np. "Tworzę plik programu hammer.py na 
       if (!reader) throw new Error('Nie udało się utworzyć strumienia odpowiedzi.');
 
       let isFirstToken = true;
+      let metaChecked = false;
       let buffer = '';
       const streamer = new CodeBoxStreamer();
 
@@ -442,13 +793,20 @@ Napisz jedno krótkie zdanie co robisz (np. "Tworzę plik programu hammer.py na 
         buffer += text;
 
         // Sprawdź czy pierwsza linia zawiera {"chatId": ...}
-        if (buffer.includes('\n') && !activeChatId) {
+        if (!metaChecked) {
+          if (!buffer.includes('\n') && buffer.trim().startsWith('{')) {
+            continue;
+          }
+          metaChecked = true;
           const lines = buffer.split('\n');
           const firstLine = lines[0].trim();
           if (firstLine.startsWith('{') && firstLine.includes('chatId')) {
             try {
               const meta = JSON.parse(firstLine);
-              if (meta.chatId) activeChatId = meta.chatId;
+              if (meta.chatId && !activeChatId) {
+                activeChatId = meta.chatId;
+                activeChatTitle = desiredCliTitle;
+              }
               buffer = lines.slice(1).join('\n');
             } catch {}
           }

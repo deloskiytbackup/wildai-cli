@@ -103,6 +103,7 @@ export function printBanner(options: {
   baseUrl: string;
   agentMode: boolean;
   isReasoning?: boolean;
+  chatTitle?: string | null;
 }) {
   const branch = getGitBranch();
   const workspace = getFriendlyWorkspace();
@@ -112,10 +113,13 @@ export function printBanner(options: {
   const border = '─'.repeat(width - 2);
 
   console.log(chalk.dim(`╭${border}╮`));
-  console.log(chalk.dim(`│ `) + chalk.bold.cyan('✦ WildAI CLI') + ' '.repeat(Math.max(1, width - 23)) + chalk.dim(`v2.0.0 │`));
+  console.log(chalk.dim(`│ `) + chalk.bold.cyan('✦ WildAI CLI') + ' '.repeat(Math.max(1, width - 23)) + chalk.dim(`v2.1.0 │`));
   console.log(chalk.dim(`│ `) + chalk.white('Katalog:   ') + chalk.bold(workspace) + branchDisplay + ' '.repeat(Math.max(1, width - 15 - workspace.length - (branch ? branch.length + 8 : 0))) + chalk.dim(`│`));
   
   console.log(chalk.dim(`│ `) + chalk.white('Model:     ') + chalk.hex('#10a37f').bold(options.model) + ' '.repeat(Math.max(1, width - 13 - options.model.length)) + chalk.dim(`│`));
+
+  const activeTitle = options.chatTitle || 'cli-(nowa rozmowa)';
+  console.log(chalk.dim(`│ `) + chalk.white('Czat:      ') + chalk.cyan.bold(activeTitle.substring(0, 50)) + ' '.repeat(Math.max(1, width - 13 - Math.min(activeTitle.length, 50))) + chalk.dim(`│`));
 
   const thinkStr = options.isReasoning ? 'Myślenie (głęboka analiza CoT)' : 'Natychmiastowo (szybka odpowiedź)';
   console.log(chalk.dim(`│ `) + chalk.white('Odpowiedź: ') + (options.isReasoning ? chalk.magenta.bold(thinkStr) : chalk.dim(thinkStr)) + ' '.repeat(Math.max(1, width - 13 - thinkStr.length)) + chalk.dim(`│`));
@@ -127,7 +131,7 @@ export function printBanner(options: {
   const modeStr = options.agentMode ? 'agent (pełne narzędzia deweloperskie)' : 'standardowy (czat konwersacyjny)';
   console.log(chalk.dim(`│ `) + chalk.white('Tryb:      ') + (options.agentMode ? chalk.cyan.bold(modeStr) : chalk.dim(modeStr)) + ' '.repeat(Math.max(1, width - 13 - modeStr.length)) + chalk.dim(`│`));
   console.log(chalk.dim(`╰${border}╯`));
-  console.log(chalk.dim(`Wpisz `) + chalk.cyan('/help') + chalk.dim(` aby wyświetlić komendy, `) + chalk.cyan('/model') + chalk.dim(` aby zmienić model, `) + chalk.cyan('/think') + chalk.dim(` dla trybu myślenia.\n`));
+  console.log(chalk.dim(`Wpisz `) + chalk.cyan('/history') + chalk.dim(` (historia czatów), `) + chalk.cyan('/new [nazwa]') + chalk.dim(` (nowy czat cli-...), `) + chalk.cyan('/model') + chalk.dim(` lub `) + chalk.cyan('/help') + chalk.dim(`.\n`));
 }
 
 export function printStreamHeader() {
@@ -157,6 +161,10 @@ export function printSessionStats(stats: SessionStats) {
 
 export function printHelp() {
   console.log(chalk.dim('\n╭─ Dostępne Polecenia Slash Commands ────────────────────────╮'));
+  console.log(chalk.dim(`│ `) + chalk.cyan('/history') + chalk.dim('       ') + chalk.white('Przeglądaj i wznów swoje czaty z historii (CLI & Web)'));
+  console.log(chalk.dim(`│ `) + chalk.cyan('/new [nazwa]') + chalk.dim('   ') + chalk.white('Utwórz nową rozmowę z prefiksem cli-<nazwa>'));
+  console.log(chalk.dim(`│ `) + chalk.cyan('/rename <nazwa>') + chalk.dim('') + chalk.white('Zmień nazwę aktualnego czatu (z prefiksem cli-)'));
+  console.log(chalk.dim(`│ `) + chalk.cyan('/delete') + chalk.dim('        ') + chalk.white('Usuń aktualny czat z historii konta'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/model') + chalk.dim('         ') + chalk.white('Wybierz aktywny model AI (OpenAI / Anthropic / WildAI)'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/think') + chalk.dim('         ') + chalk.white('Przełącz tryb myślenia (Natychmiastowo ↔ Myślenie CoT)'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/image [opis]') + chalk.dim('  ') + chalk.white('Wygeneruj obraz AI i zapisz do pliku PNG w katalogu'));
