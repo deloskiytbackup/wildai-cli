@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { input, select, confirm } from '@inquirer/prompts';
 import { loadConfig, saveConfig } from './config';
 import { 
@@ -13,6 +15,7 @@ import {
   printPlanUpgradeNotice,
   copyToClipboard, 
   exportChatToMarkdown, 
+  getProviderBadge,
   getChalk 
 } from './ui';
 import { localTools, printToolsList } from './tools';
@@ -26,7 +29,67 @@ export interface ModelInfo {
   displayName: string;
   provider: string;
   isPro: boolean;
+  isUncensored?: boolean;
   minPlan?: string;
+}
+
+export async function generateAndSaveImage(promptText: string) {
+  const config = loadConfig();
+  const chalk = getChalk();
+  if (!promptText.trim()) {
+    printWarning('Podaj opis obrazu, np.: /image realistyczny portret kota w neonowym mieście');
+    return;
+  }
+
+  const spinner = ora({
+    text: chalk.cyan(`Generowanie obrazu AI: "${promptText}"...`),
+    color: 'cyan',
+  }).start();
+
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (config.accessToken) headers['Authorization'] = `Bearer ${config.accessToken}`;
+
+    const res = await fetch(config.baseUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: `/image ${promptText}` }],
+        model: 'chatgpt-image-latest',
+        chatId: null,
+      }),
+    });
+
+    if (!res.ok) {
+      spinner.stop();
+      const errTxt = await res.text();
+      printError(`Błąd generowania obrazu (${res.status}): ${errTxt}`);
+      return;
+    }
+
+    const fullText = await res.text();
+    spinner.stop();
+
+    const b64Match = fullText.match(/data:image\/[a-zA-Z0-9+.-]+;base64,([A-Za-z0-9+/=]+)/);
+    if (b64Match && b64Match[1]) {
+      const fileName = `wildai-image-${Date.now()}.png`;
+      const outPath = path.resolve(process.cwd(), fileName);
+      fs.writeFileSync(outPath, Buffer.from(b64Match[1], 'base64'));
+      printSuccess(`Obraz został wygenerowany i zapisany do: ${chalk.bold.green(outPath)}`);
+      return;
+    }
+
+    const urlMatch = fullText.match(/!\[image\]\((https?:\/\/[^\)]+)\)/i);
+    if (urlMatch && urlMatch[1]) {
+      printSuccess(`Obraz wygenerowany! URL: ${chalk.bold.cyan(urlMatch[1])}`);
+      return;
+    }
+
+    printWarning('Nie udało się wyodrębnić pliku obrazu z odpowiedzi serwera.');
+  } catch (err: any) {
+    spinner.stop();
+    printError(`Błąd: ${err.message}`);
+  }
 }
 
 async function checkConnection(baseUrl: string): Promise<boolean> {
@@ -42,7 +105,7 @@ async function checkConnection(baseUrl: string): Promise<boolean> {
 export async function fetchModels(baseUrl: string): Promise<ModelInfo[]> {
   try {
     const origin = new URL(baseUrl).origin;
-    const response = await fetch(`${origin}/api/models`);
+    const response = await fetch(`${origin}/api/models?t=${Date.now()}`, { cache: 'no-store' });
     if (!response.ok) return [];
     const data = await response.json();
     if (Array.isArray(data)) {
@@ -51,6 +114,7 @@ export async function fetchModels(baseUrl: string): Promise<ModelInfo[]> {
         displayName: m.displayName || m.modelId || m.name,
         provider: m.provider || 'ollama',
         isPro: Boolean(m.isPro),
+        isUncensored: Boolean(m.isUncensored),
         minPlan: m.minPlan || 'free',
       }));
     }
@@ -73,11 +137,12 @@ export async function selectModel() {
   }
 
   const choices = models.map((m) => {
+    const provBadge = getProviderBadge(m.modelId, m.isUncensored);
     const badge = m.isPro ? chalk.yellow('[PRO]') : chalk.green('[FREE]');
     return {
-      name: `${m.displayName} ${badge}`,
+      name: `${provBadge} ${m.displayName} ${badge}`,
       value: m.modelId,
-      description: `Wymagany plan: ${m.minPlan?.toUpperCase() || 'FREE'}`,
+      description: `ID: ${m.modelId} • Plan: ${m.minPlan?.toUpperCase() || 'FREE'}`,
     };
   });
 
@@ -109,6 +174,7 @@ export async function startChat() {
   }
 
   let agentMode = false;
+  let isReasoning = false;
   let lastAssistantResponse = '';
   let activeChatId: string | null = null;
 
@@ -120,13 +186,17 @@ export async function startChat() {
     isAdmin: userInfo?.isAdmin,
     baseUrl: config.baseUrl,
     agentMode,
+    isReasoning,
   });
 
   const messages: any[] = [];
 
   while (true) {
     config = loadConfig();
-    const promptPrefix = chalk.bold.cyan('❯ ') + (agentMode ? chalk.dim('[agent] ') : '');
+    const promptPrefix =
+      chalk.bold.cyan('❯ ') +
+      (agentMode ? chalk.dim('[agent] ') : '') +
+      (isReasoning ? chalk.magenta('[myślenie] ') : '');
     let userPrompt = '';
 
     try {
@@ -160,6 +230,21 @@ export async function startChat() {
 
       if (command === '/model') {
         await selectModel();
+        continue;
+      }
+
+      if (command === '/think') {
+        isReasoning = !isReasoning;
+        if (isReasoning) {
+          printSuccess('Włączono tryb MYŚLENIE (Chain-of-Thought): Model wyświetli proces rozumowania krok po kroku.');
+        } else {
+          printSystemMessage('Przełączono na tryb NATYCHMIASTOWO (szybka odpowiedź).');
+        }
+        continue;
+      }
+
+      if (command === '/image') {
+        await generateAndSaveImage(arg);
         continue;
       }
 
@@ -233,6 +318,7 @@ export async function startChat() {
           isAdmin: userInfo?.isAdmin,
           baseUrl: config.baseUrl,
           agentMode,
+          isReasoning,
         });
         printSuccess('Pamięć czatu i ekran zostały wyczyszczone.');
         continue;
@@ -313,6 +399,7 @@ Napisz jedno krótkie zdanie co robisz (np. "Tworzę plik programu hammer.py na 
           messages: requestMessages,
           model: config.model,
           chatId: activeChatId,
+          isReasoning,
           max_tokens: 4096, // Bezpieczny limit maksymalnej liczby tokenów odpowiedzi
         }),
         signal: abortController.signal,

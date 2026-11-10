@@ -9,15 +9,18 @@ export function highlightCode(code: string, lang = ''): string {
   return code
     // Stringi
     .replace(/(["'`].*?["'`])/g, chalk.green('$1'))
-    // Słowa kluczowe
+    // Słowa kluczowe (TS/JS/Python/Swift/Go/Rust)
     .replace(
-      /\b(const|let|var|function|return|import|export|from|if|else|for|while|class|interface|type|async|await|try|catch|new|def|self|public|private|static|extends|implements)\b/g,
+      /\b(const|let|var|function|return|import|export|from|if|else|elif|for|while|switch|case|break|continue|class|struct|enum|protocol|interface|type|async|await|try|catch|finally|new|def|self|public|private|static|extends|implements|fn|mut|pub|package|func|defer|go|select)\b/g,
       chalk.magenta.bold('$1')
     )
     // Typy i wartości stałe
-    .replace(/\b(number|string|boolean|any|void|null|undefined|true|false)\b/g, chalk.cyan('$1'))
+    .replace(
+      /\b(number|string|boolean|any|void|null|undefined|true|false|True|False|None|Int|String|Bool|Double|Float| Promise|Record|Array)\b/g,
+      chalk.cyan('$1')
+    )
     // Liczby
-    .replace(/\b(\d+)\b/g, chalk.yellow('$1'));
+    .replace(/\b(\d+(?:\.\d+)?)\b/g, chalk.yellow('$1'));
 }
 
 export function formatCodeBox(code: string, lang = 'kod'): string {
@@ -41,15 +44,65 @@ export function formatCodeBox(code: string, lang = 'kod'): string {
 
 export class CodeBoxStreamer {
   private inCodeBlock = false;
+  private inThinkBlock = false;
   private currentLang = '';
   private lineNumber = 1;
   private lineBuffer = '';
+  private tagBuffer = '';
   private isStartOfLine = true;
   private width = Math.min(process.stdout.columns || 76, 76);
 
-  processChunk(chunk: string) {
-    for (let i = 0; i < chunk.length; i++) {
-      const char = chunk[i];
+  processChunk(rawChunk: string) {
+    // Normalizacja znaczników [[THINK]] / [[/THINK]] do <think> / </think>
+    const chunk = (this.tagBuffer + rawChunk)
+      .replace(/\[\[THINK\]\]/gi, '<think>')
+      .replace(/\[\[\/THINK\]\]/gi, '</think>');
+    this.tagBuffer = '';
+
+    // Jeśli koniec chunku wygląda jak urwany tag (np. "<thin", "</thin", "[[TH"), przytrzymaj w tagBuffer
+    const partialMatch = chunk.match(/(<\/?t(?:h(?:i(?:n(?:k[^>]*?)?)?)?)?|\[\[(?:\/?T(?:H(?:I(?:N(?:K\]?)?)?)?)?)?)$/i);
+    let toProcess = chunk;
+    if (partialMatch && !partialMatch[0].endsWith('>')) {
+      this.tagBuffer = partialMatch[0];
+      toProcess = chunk.slice(0, chunk.length - this.tagBuffer.length);
+    }
+
+    let idx = 0;
+    while (idx < toProcess.length) {
+      if (!this.inThinkBlock) {
+        const openMatch = toProcess.slice(idx).match(/^<think[^>]*>\r?\n?/i);
+        if (openMatch) {
+          this.inThinkBlock = true;
+          const label = '🧠 Proces myślenia';
+          const borderLen = Math.max(1, this.width - label.length - 6);
+          process.stdout.write(
+            `\n${chalk.dim('╭─ ')}${chalk.magenta(label)} ${chalk.dim('─'.repeat(borderLen))}${chalk.dim('╮')}\n${chalk.dim('│ ')}`
+          );
+          idx += openMatch[0].length;
+          continue;
+        }
+      } else {
+        const closeMatch = toProcess.slice(idx).match(/^<\/think>\s*/i);
+        if (closeMatch) {
+          this.inThinkBlock = false;
+          const border = '─'.repeat(this.width - 2);
+          process.stdout.write(`\n${chalk.dim('╰' + border + '╯')}\n\n`);
+          this.isStartOfLine = true;
+          idx += closeMatch[0].length;
+          continue;
+        }
+      }
+
+      const char = toProcess[idx++];
+
+      if (this.inThinkBlock) {
+        if (char === '\n') {
+          process.stdout.write(`\n${chalk.dim('│ ')}`);
+        } else {
+          process.stdout.write(chalk.dim.italic(char));
+        }
+        continue;
+      }
 
       if (this.inCodeBlock) {
         this.lineBuffer += char;
@@ -82,7 +135,9 @@ export class CodeBoxStreamer {
                 this.lineNumber = 1;
                 const langBadge = `[${this.currentLang}]`;
                 const borderLen = Math.max(1, this.width - langBadge.length - 6);
-                process.stdout.write(`\n${chalk.dim('╭─ ')}${chalk.bold.cyan(langBadge)} ${chalk.dim('─'.repeat(borderLen))}${chalk.dim('╮')}\n`);
+                process.stdout.write(
+                  `\n${chalk.dim('╭─ ')}${chalk.bold.cyan(langBadge)} ${chalk.dim('─'.repeat(borderLen))}${chalk.dim('╮')}\n`
+                );
                 this.lineBuffer = '';
                 this.isStartOfLine = false;
               }
@@ -108,6 +163,15 @@ export class CodeBoxStreamer {
   }
 
   flush() {
+    if (this.tagBuffer) {
+      process.stdout.write(this.tagBuffer);
+      this.tagBuffer = '';
+    }
+    if (this.inThinkBlock) {
+      const border = '─'.repeat(this.width - 2);
+      process.stdout.write(`\n${chalk.dim('╰' + border + '╯')}\n\n`);
+      this.inThinkBlock = false;
+    }
     if (this.inCodeBlock && this.lineBuffer) {
       const line = this.lineBuffer.replace(/\r?\n$/, '');
       const numStr = (this.lineNumber++).toString().padStart(3, ' ');

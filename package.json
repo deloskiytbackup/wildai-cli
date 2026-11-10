@@ -1,7 +1,7 @@
 {
   "name": "wildai-cli",
-  "version": "1.2.0",
-  "description": "Oficjalne, nowoczesne CLI dla platformy WildAI z obsługą tokenów i narzędzi deweloperskich",
+  "version": "2.0.0",
+  "description": "Oficjalne, nowoczesne CLI v2.0 dla platformy WildAI (tryb myślenia CoT, agent, obrazy i tokeny)",
   "main": "dist/index.js",
   "bin": {
     "wildai": "./dist/index.js"

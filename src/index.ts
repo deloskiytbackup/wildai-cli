@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { startChat, fetchModels, selectModel } from './chat';
+import { startChat, fetchModels, selectModel, generateAndSaveImage } from './chat';
 import { loadConfig, saveConfig, DEFAULT_CONFIG } from './config';
 import { login, logout } from './auth';
-import { printSystemMessage, printSuccess, printError, printPlanUpgradeNotice, getChalk, printStreamHeader, printStreamFooter } from './ui';
+import { printSystemMessage, printSuccess, printError, printPlanUpgradeNotice, getChalk, getProviderBadge, printStreamHeader, printStreamFooter } from './ui';
 import { estimateTokens, estimateCost, TokenStats } from './tokenTracker';
 import { CodeBoxStreamer } from './codeStreamer';
 import ora from 'ora';
@@ -12,23 +12,25 @@ const program = new Command();
 
 program
   .name('wildai')
-  .description('Oficjalne, nowoczesne CLI dla ekosystemu WildAI z obsługą tokenów i narzędzi')
-  .version('1.2.0');
+  .description('Oficjalne, nowoczesne CLI v2.0 dla ekosystemu WildAI (tryb myślenia CoT, agent, obrazy i tokeny)')
+  .version('2.0.0');
 
 // Główna komenda lub pojedynczy prompt
 program
   .argument('[prompt...]', 'Opcjonalne bezpośrednie pytanie do AI (tryb one-shot)')
-  .action(async (promptParts: string[]) => {
+  .option('-t, --think', 'Włącz tryb głębokiego myślenia (Chain-of-Thought)')
+  .action(async (promptParts: string[], options: { think?: boolean }) => {
     if (promptParts && promptParts.length > 0) {
       const userPrompt = promptParts.join(' ');
       const config = loadConfig();
       const chalk = getChalk();
+      const isReasoning = Boolean(options?.think);
 
       const startTime = Date.now();
       const promptTokens = estimateTokens(userPrompt);
 
       const spinner = ora({
-        text: chalk.dim('WildAI generuje odpowiedź...'),
+        text: chalk.dim(isReasoning ? 'WildAI analizuje problem (tryb myślenia)...' : 'WildAI generuje odpowiedź...'),
         color: 'cyan',
       }).start();
 
@@ -42,6 +44,7 @@ program
           body: JSON.stringify({
             messages: [{ role: 'user', content: userPrompt }],
             model: config.model,
+            isReasoning,
             chatId: null,
           }),
         });
@@ -153,16 +156,24 @@ program
       return;
     }
 
-    console.log(chalk.cyan.bold('\n╭─ DOSTĘPNE MODELE WILDAI ──────────────────────────────────────╮'));
+    console.log(chalk.cyan.bold('\n╭─ DOSTĘPNE MODELE WILDAI ──────────────────────────────────────────────╮'));
     models.forEach((m) => {
       const isCurrent = m.modelId === config.model;
+      const provBadge = getProviderBadge(m.modelId, m.isUncensored).padEnd(22);
       const currentBadge = isCurrent ? chalk.bold.green(' (AKTYWNY)') : '';
       const proBadge = m.isPro ? chalk.yellow('[PRO]') : chalk.green('[FREE]');
       const planStr = `Plan: ${(m.minPlan?.toUpperCase() || 'FREE')}`;
-      console.log(`│ ${chalk.bold.white(m.displayName.padEnd(24))} ${proBadge} ${chalk.dim(planStr.padEnd(16))} ${currentBadge}`);
+      console.log(`│ ${provBadge} ${chalk.bold.white(m.displayName.padEnd(24))} ${proBadge} ${chalk.dim(planStr.padEnd(12))}${currentBadge}`);
     });
-    console.log(chalk.cyan.bold('╰───────────────────────────────────────────────────────────────╯\n'));
+    console.log(chalk.cyan.bold('╰───────────────────────────────────────────────────────────────────────╯\n'));
     console.log(chalk.dim(`Aby zmienić model: `) + chalk.yellow(`wildai model`) + chalk.dim(` lub `) + chalk.yellow(`wildai config -m <id>\n`));
+  });
+
+program
+  .command('image <prompt...>')
+  .description('Wygeneruj obraz AI (ChatGPT Image) i zapisz plik PNG na dysku')
+  .action(async (promptParts: string[]) => {
+    await generateAndSaveImage(promptParts.join(' '));
   });
 
 program

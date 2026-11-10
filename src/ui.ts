@@ -76,12 +76,33 @@ export function printPlanUpgradeNotice(modelName: string, reqPlan: string, userP
   console.log(chalk.yellow(`╰${border}╯\n`));
 }
 
+export function getProviderBadge(modelId: string, isUncensored = false): string {
+  const id = (modelId || '').toLowerCase();
+  if (id.includes('claude') || id.includes('fable')) {
+    return chalk.hex('#D97757').bold('[Anthropic]');
+  }
+  if (id.includes('gemini') || id.includes('gemma')) {
+    return chalk.hex('#4285F4').bold('[Google]');
+  }
+  if (id.includes('gpt') || id.includes('chatgpt') || id.startsWith('o1') || id.startsWith('o3')) {
+    return chalk.hex('#10a37f').bold('[OpenAI]');
+  }
+  if (id.includes('grok')) {
+    return chalk.white.bold('[xAI]');
+  }
+  if (isUncensored || id.includes('uncensored') || id.includes('deepseek') || id.includes('glm')) {
+    return chalk.hex('#FF6B35').bold('[WildAI 18+]');
+  }
+  return chalk.cyan('[WildAI]');
+}
+
 export function printBanner(options: {
   model: string;
   userEmail?: string | null;
   isAdmin?: boolean;
   baseUrl: string;
   agentMode: boolean;
+  isReasoning?: boolean;
 }) {
   const branch = getGitBranch();
   const workspace = getFriendlyWorkspace();
@@ -91,10 +112,13 @@ export function printBanner(options: {
   const border = '─'.repeat(width - 2);
 
   console.log(chalk.dim(`╭${border}╮`));
-  console.log(chalk.dim(`│ `) + chalk.bold.cyan('✦ WildAI CLI') + ' '.repeat(Math.max(1, width - 23)) + chalk.dim(`v1.2.0 │`));
+  console.log(chalk.dim(`│ `) + chalk.bold.cyan('✦ WildAI CLI') + ' '.repeat(Math.max(1, width - 23)) + chalk.dim(`v2.0.0 │`));
   console.log(chalk.dim(`│ `) + chalk.white('Katalog:   ') + chalk.bold(workspace) + branchDisplay + ' '.repeat(Math.max(1, width - 15 - workspace.length - (branch ? branch.length + 8 : 0))) + chalk.dim(`│`));
   
   console.log(chalk.dim(`│ `) + chalk.white('Model:     ') + chalk.hex('#10a37f').bold(options.model) + ' '.repeat(Math.max(1, width - 13 - options.model.length)) + chalk.dim(`│`));
+
+  const thinkStr = options.isReasoning ? 'Myślenie (głęboka analiza CoT)' : 'Natychmiastowo (szybka odpowiedź)';
+  console.log(chalk.dim(`│ `) + chalk.white('Odpowiedź: ') + (options.isReasoning ? chalk.magenta.bold(thinkStr) : chalk.dim(thinkStr)) + ' '.repeat(Math.max(1, width - 13 - thinkStr.length)) + chalk.dim(`│`));
 
   const userRole = options.isAdmin ? ' [ADMIN]' : '';
   const userText = options.userEmail ? `${options.userEmail}${userRole}` : 'GOŚĆ (niezalogowany - wpisz /login)';
@@ -103,7 +127,7 @@ export function printBanner(options: {
   const modeStr = options.agentMode ? 'agent (pełne narzędzia deweloperskie)' : 'standardowy (czat konwersacyjny)';
   console.log(chalk.dim(`│ `) + chalk.white('Tryb:      ') + (options.agentMode ? chalk.cyan.bold(modeStr) : chalk.dim(modeStr)) + ' '.repeat(Math.max(1, width - 13 - modeStr.length)) + chalk.dim(`│`));
   console.log(chalk.dim(`╰${border}╯`));
-  console.log(chalk.dim(`Wpisz `) + chalk.cyan('/help') + chalk.dim(` aby wyświetlić komendy, `) + chalk.cyan('/model') + chalk.dim(` aby zmienić model, `) + chalk.cyan('/exit') + chalk.dim(` aby wyjść.\n`));
+  console.log(chalk.dim(`Wpisz `) + chalk.cyan('/help') + chalk.dim(` aby wyświetlić komendy, `) + chalk.cyan('/model') + chalk.dim(` aby zmienić model, `) + chalk.cyan('/think') + chalk.dim(` dla trybu myślenia.\n`));
 }
 
 export function printStreamHeader() {
@@ -133,7 +157,9 @@ export function printSessionStats(stats: SessionStats) {
 
 export function printHelp() {
   console.log(chalk.dim('\n╭─ Dostępne Polecenia Slash Commands ────────────────────────╮'));
-  console.log(chalk.dim(`│ `) + chalk.cyan('/model') + chalk.dim('         ') + chalk.white('Wybierz aktywny model AI'));
+  console.log(chalk.dim(`│ `) + chalk.cyan('/model') + chalk.dim('         ') + chalk.white('Wybierz aktywny model AI (OpenAI / Anthropic / WildAI)'));
+  console.log(chalk.dim(`│ `) + chalk.cyan('/think') + chalk.dim('         ') + chalk.white('Przełącz tryb myślenia (Natychmiastowo ↔ Myślenie CoT)'));
+  console.log(chalk.dim(`│ `) + chalk.cyan('/image [opis]') + chalk.dim('  ') + chalk.white('Wygeneruj obraz AI i zapisz do pliku PNG w katalogu'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/mode') + chalk.dim('          ') + chalk.white('Przełącz tryb wykonania (czat ↔ agent kodujący)'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/tokens') + chalk.dim('        ') + chalk.white('Pokaż zużycie tokenów i szacowany koszt sesji'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/tools') + chalk.dim('         ') + chalk.white('Pokaż listę dostępnych narzędzi deweloperskich'));
