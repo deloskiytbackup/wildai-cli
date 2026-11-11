@@ -168,6 +168,7 @@ export function printHelp() {
   console.log(chalk.dim(`│ `) + chalk.cyan('/model') + chalk.dim('         ') + chalk.white('Wybierz aktywny model AI (OpenAI / Anthropic / WildAI)'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/think') + chalk.dim('         ') + chalk.white('Przełącz tryb myślenia (Natychmiastowo ↔ Myślenie CoT)'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/image [opis]') + chalk.dim('  ') + chalk.white('Wygeneruj obraz AI i zapisz do pliku PNG w katalogu'));
+  console.log(chalk.dim(`│ `) + chalk.cyan('/open') + chalk.dim('          ') + chalk.white('Zapisz i otwórz ostatni obraz AI w Podglądzie macOS'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/mode') + chalk.dim('          ') + chalk.white('Przełącz tryb wykonania (czat ↔ agent kodujący)'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/tokens') + chalk.dim('        ') + chalk.white('Pokaż zużycie tokenów i szacowany koszt sesji'));
   console.log(chalk.dim(`│ `) + chalk.cyan('/tools') + chalk.dim('         ') + chalk.white('Pokaż listę dostępnych narzędzi deweloperskich'));

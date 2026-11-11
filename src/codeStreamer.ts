@@ -46,6 +46,7 @@ export class CodeBoxStreamer {
   private inCodeBlock = false;
   private inThinkBlock = false;
   private inStepsBlock = false;
+  private inBase64Image = false;
   private stepsBuffer = '';
   private showReasoning = false;
   private currentLang = '';
@@ -110,6 +111,21 @@ export class CodeBoxStreamer {
 
     let idx = 0;
     while (idx < toProcess.length) {
+      // Ukrywanie surowego strumienia ![image](data:image/...;base64,...) w terminalu
+      if (this.inBase64Image) {
+        if (toProcess[idx] === ')') {
+          this.inBase64Image = false;
+        }
+        idx++;
+        continue;
+      }
+      const imgStart = toProcess.slice(idx).match(/^!\[[^\]]*\]\(data:image\//i);
+      if (imgStart) {
+        this.inBase64Image = true;
+        idx += imgStart[0].length;
+        continue;
+      }
+
       // Obsługa bloku <steps>...</steps> (np. z claude-fable-5.2)
       if (!this.inStepsBlock && !this.inThinkBlock) {
         const openSteps = toProcess.slice(idx).match(/^<steps[^>]*>\r?\n?/i);

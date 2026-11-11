@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { exec } from 'child_process';
 import { input, select, confirm } from '@inquirer/prompts';
 import { loadConfig, saveConfig } from './config';
 import { 
@@ -157,16 +158,27 @@ export async function deleteUserChat(
   }
 }
 
+let lastImageBase64: string | null = null;
+let lastSavedImagePath: string | null = null;
+
 function renderLoadedChatMessages(chat: ChatDetail) {
   const chalk = getChalk();
   const width = Math.min(process.stdout.columns || 76, 76);
   const border = '─'.repeat(Math.max(10, width - 2));
+  const msgCountStr = ` (${chat.messages?.length || 0} wiadomości)`;
+  const maxTitleLen = Math.max(10, width - 22 - msgCountStr.length);
+  const displayTitle = (chat.title || 'Nowa rozmowa').substring(0, maxTitleLen);
+  const rawLineLen = 19 + displayTitle.length + msgCountStr.length;
+  const padSpaces = ' '.repeat(Math.max(1, width - rawLineLen - 2));
+
   console.log(chalk.cyan.bold(`\n╭${border}╮`));
   console.log(
     chalk.cyan.bold(`│ `) +
       chalk.bold.white(`📜 WZNOWIONO CZAT: `) +
-      chalk.bold.green(chat.title) +
-      chalk.dim(` (${chat.messages?.length || 0} wiadomości)`)
+      chalk.bold.green(displayTitle) +
+      chalk.dim(msgCountStr) +
+      padSpaces +
+      chalk.cyan.bold(`│`)
   );
   console.log(chalk.cyan.bold(`╰${border}╯\n`));
 
@@ -181,12 +193,36 @@ function renderLoadedChatMessages(chat: ChatDetail) {
       console.log(chalk.bold.cyan('❯ Ty: ') + chalk.white(m.content));
       console.log('');
     } else if (m.role === 'assistant') {
+      const b64Match = (m.content || '').match(/data:image\/[a-zA-Z0-9+.-]+;base64,([A-Za-z0-9+/=]+)/);
+      if (b64Match && b64Match[1]) {
+        lastImageBase64 = b64Match[1];
+        lastSavedImagePath = null;
+      }
+
       const cleaned = (m.content || '')
         .replace(/<think[^>]*>[\s\S]*?<\/think>\s*/gi, '')
         .replace(/\[\[THINK\]\][\s\S]*?\[\[\/THINK\]\]\s*/gi, '')
         .replace(/<steps[^>]*>[\s\S]*?<\/steps>\s*/gi, '')
+        .replace(
+          /!\[[^\]]*\]\(data:image\/[a-zA-Z0-9+.-]+;base64,[A-Za-z0-9+/=]+\)/g,
+          chalk.bold.cyan('🖼️  [Wygenerowany obraz AI (PNG)]') +
+            chalk.dim(' — wpisz ') +
+            chalk.bold.yellow('/open') +
+            chalk.dim(' aby zapisać i otworzyć obraz')
+        )
+        .replace(
+          /data:image\/[a-zA-Z0-9+.-]+;base64,[A-Za-z0-9+/=]+/g,
+          chalk.bold.cyan('🖼️  [Wygenerowany obraz AI (PNG)]') +
+            chalk.dim(' — wpisz ') +
+            chalk.bold.yellow('/open') +
+            chalk.dim(' aby zapisać i otworzyć obraz')
+        )
         .trim();
-      console.log(chalk.bold.hex('#10a37f')('✦ WildAI: ') + chalk.gray(cleaned.substring(0, 600) + (cleaned.length > 600 ? '...' : '')));
+
+      const preview = cleaned.includes('🖼️')
+        ? cleaned
+        : cleaned.substring(0, 600) + (cleaned.length > 600 ? '...' : '');
+      console.log(chalk.bold.hex('#10a37f')('✦ WildAI: ') + chalk.gray(preview));
       console.log(chalk.dim('─'.repeat(40)));
     }
   }
@@ -584,6 +620,29 @@ export async function startChat(options?: { resumeChatId?: string; openHistory?:
         continue;
       }
 
+      if (command === '/open') {
+        if (!lastImageBase64 && !lastSavedImagePath) {
+          printWarning('Brak obrazu w aktualnej rozmowie do otwarcia.');
+          continue;
+        }
+        try {
+          if (!lastSavedImagePath && lastImageBase64) {
+            const fileName = `wildai-image-${Date.now()}.png`;
+            lastSavedImagePath = path.resolve(process.cwd(), fileName);
+            fs.writeFileSync(lastSavedImagePath, Buffer.from(lastImageBase64, 'base64'));
+          }
+          if (lastSavedImagePath) {
+            printSuccess(`Zapisano i otwieram obraz: ${chalk.bold.green(lastSavedImagePath)}`);
+            if (process.platform === 'darwin') {
+              exec(`open "${lastSavedImagePath}"`);
+            }
+          }
+        } catch (e: any) {
+          printError(`Nie udało się otworzyć obrazu: ${e.message}`);
+        }
+        continue;
+      }
+
       if (command === '/tokens' || command === '/stats') {
         printSessionStats(sessionTracker.getSessionStats());
         continue;
@@ -831,6 +890,21 @@ Napisz jedno krótkie zdanie co robisz (np. "Tworzę plik programu hammer.py na 
         spinner.stop();
       }
       streamer.flush();
+
+      // Jeśli odpowiedź zawiera obraz base64, zapisz go od razu do pliku i powiadom użytkownika
+      const streamImgMatch = fullResponse.match(/data:image\/[a-zA-Z0-9+.-]+;base64,([A-Za-z0-9+/=]+)/);
+      if (streamImgMatch && streamImgMatch[1]) {
+        lastImageBase64 = streamImgMatch[1];
+        const fileName = `wildai-image-${Date.now()}.png`;
+        lastSavedImagePath = path.resolve(process.cwd(), fileName);
+        fs.writeFileSync(lastSavedImagePath, Buffer.from(lastImageBase64, 'base64'));
+        console.log(
+          `\n${chalk.bold.cyan('🖼️  [Wygenerowano obraz AI]')} Zapisano do: ${chalk.bold.green(lastSavedImagePath)}` +
+            chalk.dim(' (wpisz ') +
+            chalk.bold.yellow('/open') +
+            chalk.dim(' aby otworzyć w Podglądzie)')
+        );
+      }
 
       const endTime = Date.now();
       const durationMs = Math.max(endTime - startTime, 1);
