@@ -96,7 +96,7 @@ program
         let isFirstLine = true;
         let isFirstToken = true;
         let fullText = '';
-        const streamer = new CodeBoxStreamer();
+        const streamer = new CodeBoxStreamer(isReasoning);
 
         while (true) {
           const { done, value } = await reader.read();

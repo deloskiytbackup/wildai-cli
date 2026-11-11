@@ -45,12 +45,51 @@ export function formatCodeBox(code: string, lang = 'kod'): string {
 export class CodeBoxStreamer {
   private inCodeBlock = false;
   private inThinkBlock = false;
+  private inStepsBlock = false;
+  private stepsBuffer = '';
+  private showReasoning = false;
   private currentLang = '';
   private lineNumber = 1;
   private lineBuffer = '';
   private tagBuffer = '';
   private isStartOfLine = true;
   private width = Math.min(process.stdout.columns || 76, 76);
+
+  constructor(showReasoning = false) {
+    this.showReasoning = showReasoning;
+  }
+
+  private renderStepsBox(rawStepsContent: string) {
+    if (!this.showReasoning) return;
+    const trimmed = rawStepsContent.trim();
+    if (!trimmed) return;
+
+    const label = '🧠 Proces myślenia';
+    const borderLen = Math.max(1, this.width - label.length - 5);
+    const border = '─'.repeat(this.width - 2);
+
+    process.stdout.write(
+      `\n${chalk.dim('╭─ ')}${chalk.magenta(label)} ${chalk.dim('─'.repeat(borderLen))}${chalk.dim('╮')}\n`
+    );
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        for (const step of parsed) {
+          const title = step?.title ? chalk.bold.white(step.title) : '';
+          const desc = step?.description ? chalk.dim.italic(step.description) : '';
+          process.stdout.write(`${chalk.dim('│ ')}• ${title}${title && desc ? ': ' : ''}${desc}\n`);
+        }
+        process.stdout.write(`${chalk.dim('╰' + border + '╯')}\n\n`);
+        return;
+      }
+    } catch {}
+
+    for (const line of trimmed.split('\n')) {
+      process.stdout.write(`${chalk.dim('│ ')}${chalk.dim.italic(line)}\n`);
+    }
+    process.stdout.write(`${chalk.dim('╰' + border + '╯')}\n\n`);
+  }
 
   processChunk(rawChunk: string) {
     // Normalizacja znaczników [[THINK]] / [[/THINK]] do <think> / </think>
@@ -59,8 +98,10 @@ export class CodeBoxStreamer {
       .replace(/\[\[\/THINK\]\]/gi, '</think>');
     this.tagBuffer = '';
 
-    // Jeśli koniec chunku wygląda jak urwany tag (np. "<thin", "</thin", "[[TH"), przytrzymaj w tagBuffer
-    const partialMatch = chunk.match(/(<\/?t(?:h(?:i(?:n(?:k[^>]*?)?)?)?)?|\[\[(?:\/?T(?:H(?:I(?:N(?:K\]?)?)?)?)?)?)$/i);
+    // Jeśli koniec chunku wygląda jak urwany tag (<think, </think, <steps, </steps, [[THINK), przytrzymaj w tagBuffer
+    const partialMatch = chunk.match(
+      /(<\/?(?:t(?:h(?:i(?:n(?:k[^>]*?)?)?)?)?|s(?:t(?:e(?:p(?:s[^>]*?)?)?)?)?)|\[\[(?:\/?T(?:H(?:I(?:N(?:K\]?)?)?)?)?)?)$/i
+    );
     let toProcess = chunk;
     if (partialMatch && !partialMatch[0].endsWith('>')) {
       this.tagBuffer = partialMatch[0];
@@ -69,15 +110,41 @@ export class CodeBoxStreamer {
 
     let idx = 0;
     while (idx < toProcess.length) {
+      // Obsługa bloku <steps>...</steps> (np. z claude-fable-5.2)
+      if (!this.inStepsBlock && !this.inThinkBlock) {
+        const openSteps = toProcess.slice(idx).match(/^<steps[^>]*>\r?\n?/i);
+        if (openSteps) {
+          this.inStepsBlock = true;
+          this.stepsBuffer = '';
+          idx += openSteps[0].length;
+          continue;
+        }
+      } else if (this.inStepsBlock) {
+        const closeSteps = toProcess.slice(idx).match(/^<\/steps>\s*/i);
+        if (closeSteps) {
+          this.inStepsBlock = false;
+          this.renderStepsBox(this.stepsBuffer);
+          this.stepsBuffer = '';
+          this.isStartOfLine = true;
+          idx += closeSteps[0].length;
+          continue;
+        }
+        this.stepsBuffer += toProcess[idx++];
+        continue;
+      }
+
+      // Obsługa bloku <think>...</think>
       if (!this.inThinkBlock) {
         const openMatch = toProcess.slice(idx).match(/^<think[^>]*>\r?\n?/i);
         if (openMatch) {
           this.inThinkBlock = true;
-          const label = '🧠 Proces myślenia';
-          const borderLen = Math.max(1, this.width - label.length - 6);
-          process.stdout.write(
-            `\n${chalk.dim('╭─ ')}${chalk.magenta(label)} ${chalk.dim('─'.repeat(borderLen))}${chalk.dim('╮')}\n${chalk.dim('│ ')}`
-          );
+          if (this.showReasoning) {
+            const label = '🧠 Proces myślenia';
+            const borderLen = Math.max(1, this.width - label.length - 5);
+            process.stdout.write(
+              `\n${chalk.dim('╭─ ')}${chalk.magenta(label)} ${chalk.dim('─'.repeat(borderLen))}${chalk.dim('╮')}\n${chalk.dim('│ ')}`
+            );
+          }
           idx += openMatch[0].length;
           continue;
         }
@@ -85,8 +152,10 @@ export class CodeBoxStreamer {
         const closeMatch = toProcess.slice(idx).match(/^<\/think>\s*/i);
         if (closeMatch) {
           this.inThinkBlock = false;
-          const border = '─'.repeat(this.width - 2);
-          process.stdout.write(`\n${chalk.dim('╰' + border + '╯')}\n\n`);
+          if (this.showReasoning) {
+            const border = '─'.repeat(this.width - 2);
+            process.stdout.write(`\n${chalk.dim('╰' + border + '╯')}\n\n`);
+          }
           this.isStartOfLine = true;
           idx += closeMatch[0].length;
           continue;
@@ -96,10 +165,12 @@ export class CodeBoxStreamer {
       const char = toProcess[idx++];
 
       if (this.inThinkBlock) {
-        if (char === '\n') {
-          process.stdout.write(`\n${chalk.dim('│ ')}`);
-        } else {
-          process.stdout.write(chalk.dim.italic(char));
+        if (this.showReasoning) {
+          if (char === '\n') {
+            process.stdout.write(`\n${chalk.dim('│ ')}`);
+          } else {
+            process.stdout.write(chalk.dim.italic(char));
+          }
         }
         continue;
       }
@@ -164,12 +235,21 @@ export class CodeBoxStreamer {
 
   flush() {
     if (this.tagBuffer) {
-      process.stdout.write(this.tagBuffer);
+      if (!this.inStepsBlock && !this.inThinkBlock) {
+        process.stdout.write(this.tagBuffer);
+      }
       this.tagBuffer = '';
     }
+    if (this.inStepsBlock) {
+      this.renderStepsBox(this.stepsBuffer);
+      this.stepsBuffer = '';
+      this.inStepsBlock = false;
+    }
     if (this.inThinkBlock) {
-      const border = '─'.repeat(this.width - 2);
-      process.stdout.write(`\n${chalk.dim('╰' + border + '╯')}\n\n`);
+      if (this.showReasoning) {
+        const border = '─'.repeat(this.width - 2);
+        process.stdout.write(`\n${chalk.dim('╰' + border + '╯')}\n\n`);
+      }
       this.inThinkBlock = false;
     }
     if (this.inCodeBlock && this.lineBuffer) {

@@ -113,23 +113,23 @@ export function printBanner(options: {
   const border = '─'.repeat(width - 2);
 
   console.log(chalk.dim(`╭${border}╮`));
-  console.log(chalk.dim(`│ `) + chalk.bold.cyan('✦ WildAI CLI') + ' '.repeat(Math.max(1, width - 23)) + chalk.dim(`v2.1.0 │`));
-  console.log(chalk.dim(`│ `) + chalk.white('Katalog:   ') + chalk.bold(workspace) + branchDisplay + ' '.repeat(Math.max(1, width - 15 - workspace.length - (branch ? branch.length + 8 : 0))) + chalk.dim(`│`));
+  console.log(chalk.dim(`│ `) + chalk.bold.cyan('✦ WildAI CLI') + ' '.repeat(Math.max(1, width - 22)) + chalk.dim(`v2.1.0 │`));
+  console.log(chalk.dim(`│ `) + chalk.white('Katalog:   ') + chalk.bold(workspace) + branchDisplay + ' '.repeat(Math.max(1, width - 14 - workspace.length - (branch ? branch.length + 8 : 0))) + chalk.dim(`│`));
   
-  console.log(chalk.dim(`│ `) + chalk.white('Model:     ') + chalk.hex('#10a37f').bold(options.model) + ' '.repeat(Math.max(1, width - 13 - options.model.length)) + chalk.dim(`│`));
+  console.log(chalk.dim(`│ `) + chalk.white('Model:     ') + chalk.hex('#10a37f').bold(options.model) + ' '.repeat(Math.max(1, width - 14 - options.model.length)) + chalk.dim(`│`));
 
   const activeTitle = options.chatTitle || 'cli-(nowa rozmowa)';
-  console.log(chalk.dim(`│ `) + chalk.white('Czat:      ') + chalk.cyan.bold(activeTitle.substring(0, 50)) + ' '.repeat(Math.max(1, width - 13 - Math.min(activeTitle.length, 50))) + chalk.dim(`│`));
+  console.log(chalk.dim(`│ `) + chalk.white('Czat:      ') + chalk.cyan.bold(activeTitle.substring(0, 50)) + ' '.repeat(Math.max(1, width - 14 - Math.min(activeTitle.length, 50))) + chalk.dim(`│`));
 
   const thinkStr = options.isReasoning ? 'Myślenie (głęboka analiza CoT)' : 'Natychmiastowo (szybka odpowiedź)';
-  console.log(chalk.dim(`│ `) + chalk.white('Odpowiedź: ') + (options.isReasoning ? chalk.magenta.bold(thinkStr) : chalk.dim(thinkStr)) + ' '.repeat(Math.max(1, width - 13 - thinkStr.length)) + chalk.dim(`│`));
+  console.log(chalk.dim(`│ `) + chalk.white('Odpowiedź: ') + (options.isReasoning ? chalk.magenta.bold(thinkStr) : chalk.dim(thinkStr)) + ' '.repeat(Math.max(1, width - 14 - thinkStr.length)) + chalk.dim(`│`));
 
   const userRole = options.isAdmin ? ' [ADMIN]' : '';
   const userText = options.userEmail ? `${options.userEmail}${userRole}` : 'GOŚĆ (niezalogowany - wpisz /login)';
-  console.log(chalk.dim(`│ `) + chalk.white('Konto:     ') + chalk.dim(userText) + ' '.repeat(Math.max(1, width - 13 - userText.length)) + chalk.dim(`│`));
+  console.log(chalk.dim(`│ `) + chalk.white('Konto:     ') + chalk.dim(userText) + ' '.repeat(Math.max(1, width - 14 - userText.length)) + chalk.dim(`│`));
 
   const modeStr = options.agentMode ? 'agent (pełne narzędzia deweloperskie)' : 'standardowy (czat konwersacyjny)';
-  console.log(chalk.dim(`│ `) + chalk.white('Tryb:      ') + (options.agentMode ? chalk.cyan.bold(modeStr) : chalk.dim(modeStr)) + ' '.repeat(Math.max(1, width - 13 - modeStr.length)) + chalk.dim(`│`));
+  console.log(chalk.dim(`│ `) + chalk.white('Tryb:      ') + (options.agentMode ? chalk.cyan.bold(modeStr) : chalk.dim(modeStr)) + ' '.repeat(Math.max(1, width - 14 - modeStr.length)) + chalk.dim(`│`));
   console.log(chalk.dim(`╰${border}╯`));
   console.log(chalk.dim(`Wpisz `) + chalk.cyan('/history') + chalk.dim(` (historia czatów), `) + chalk.cyan('/new [nazwa]') + chalk.dim(` (nowy czat cli-...), `) + chalk.cyan('/model') + chalk.dim(` lub `) + chalk.cyan('/help') + chalk.dim(`.\n`));
 }

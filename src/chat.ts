@@ -783,7 +783,7 @@ Napisz jedno krótkie zdanie co robisz (np. "Tworzę plik programu hammer.py na 
       let isFirstToken = true;
       let metaChecked = false;
       let buffer = '';
-      const streamer = new CodeBoxStreamer();
+      const streamer = new CodeBoxStreamer(isReasoning);
 
       while (true) {
         const { done, value } = await reader.read();
